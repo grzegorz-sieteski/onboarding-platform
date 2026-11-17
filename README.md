@@ -108,9 +108,11 @@ switch (commands.handle(command)) {
   komendy agregatu zwracają `Result`, a command handler i repozytorium też. Odrzucona komenda nie tworzy zdarzenia ani nie zmienia agregatu.
 - **Dodanie nowego błędu przestaje się kompilować tam, gdzie nie jest obsłużony** (mapowanie na HTTP, na Kafkę). Kompilator pilnuje kompletności.
 - **Przegrany wyścig o wersję strumienia** (`ConcurrentModification`) jest wartością. `JdbcEventStore` zamienia `DuplicateKeyException` w `Result.Failure`.
-- **Command handler cofa transakcję jawnie.** Metoda, która zwraca `Failure`, kończy się normalnie, więc Spring by ją zatwierdził razem z tym,
+- **Command handler cofa transakcję jawnie.** Metoda, która zwraca `Failure`, kończy się normalnie, więc Spring zatwierdziłby ją razem z tym,
   co zdążyło się zapisać (np. pierwszym z dwóch zdarzeń). Dlatego po nieudanym `save` handler robi `setRollbackOnly()`.
-  Test `SaveFailureIntegrationTest` pilnuje tego: bez tej linii zostaje w bazie połowa operacji.
+  Na H2 pilnuje tego `SaveFailureIntegrationTest`: bez tej linii zostaje w bazie połowa operacji.
+  PostgreSQL po nieudanym `INSERT` sam unieważnia całą transakcję, więc w prawdziwym wyścigu na Postgresie (30 klientów, 6 równoległych
+  zatwierdzeń każdy) wynik był taki sam z tą linią i bez niej. Linia sprawia, że poprawność nie zależy od tego, jak dana baza traktuje błąd w trakcie transakcji.
 - **Wyjątki zostają tylko na granicy z frameworkami:**
   - awaria infrastruktury (baza, outbox) leci jako wyjątek i cofa transakcję: zdarzenia, projekcje i outbox schodzą razem,
   - listener Kafki musi rzucić wyjątek, żeby kontener ponowił albo odrzucił wiadomość: `RejectedMessageException` (od razu do DLT)
