@@ -60,11 +60,9 @@ public class OnboardingIntegrationEvents {
                             onboarding.applicant().dateOfBirth())));
             case OnboardingBanned banned -> Optional.of(new Contract(PublishedEvents.ONBOARDING_BANNED,
                     new OnboardingBannedV1(banned.customerId().toString(), banned.reason())));
-            case OnboardingStarted internalOnly -> Optional.empty();
-            case OnboardingRejected internalOnly -> Optional.empty();
-            case ManualReviewRequested internalOnly -> Optional.empty();
-            case ManualReviewApproved internalOnly -> Optional.empty();
-            case ManualReviewRejected internalOnly -> Optional.empty();
+            // facts that stay inside this context
+            case OnboardingStarted _, OnboardingRejected _, ManualReviewRequested _,
+                 ManualReviewApproved _, ManualReviewRejected _ -> Optional.empty();
         };
     }
 

@@ -1,6 +1,8 @@
 package com.gs5.onboarding.application;
 
 import com.gs5.onboarding.domain.CustomerId;
+import com.gs5.onboarding.domain.OnboardingError;
+import com.gs5.onboarding.domain.shared.Result;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -30,9 +32,15 @@ public class ScreeningTimeouts {
     public void escalateOverdue(int batchSize) {
         for (CustomerId customerId : overdueScreenings.dueBefore(clock.instant(), batchSize)) {
             try {
-                commands.handle(new EscalateOverdueScreeningCommand(customerId));
-                log.info("Screening of customer {} timed out - escalated to manual review", customerId);
+                switch (commands.handle(new EscalateOverdueScreeningCommand(customerId))) {
+                    case Result.Success<CustomerId, OnboardingError> _ ->
+                            log.info("Screening of customer {} timed out - escalated to manual review", customerId);
+                    case Result.Failure<CustomerId, OnboardingError>(var error) ->
+                            log.warn("Escalation of customer {} failed, will retry on next run: {}",
+                                    customerId, error.message());
+                }
             } catch (RuntimeException e) {
+                // infrastructure outage (database down): keep going with the rest of the batch
                 log.warn("Escalation of customer {} failed, will retry on next run", customerId, e);
             }
         }

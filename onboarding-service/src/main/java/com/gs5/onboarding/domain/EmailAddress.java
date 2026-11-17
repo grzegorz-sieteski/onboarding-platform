@@ -1,6 +1,7 @@
 package com.gs5.onboarding.domain;
 
-import com.gs5.onboarding.domain.shared.InvalidValueException;
+import com.gs5.onboarding.domain.OnboardingError.InvalidValue;
+import com.gs5.onboarding.domain.shared.Result;
 
 import java.util.Locale;
 import java.util.regex.Pattern;
@@ -9,10 +10,11 @@ public record EmailAddress(String value) {
 
     private static final Pattern EMAIL = Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
 
-    public EmailAddress {
-        if (value == null || !EMAIL.matcher(value.strip()).matches()) {
-            throw new InvalidValueException("Invalid e-mail address: " + value);
+    /** Entry point for untrusted text: validates and normalizes. The constructor is for already valid values. */
+    public static Result<EmailAddress, OnboardingError> of(String text) {
+        if (text == null || !EMAIL.matcher(text.strip()).matches()) {
+            return Result.failure(new InvalidValue("Invalid e-mail address: " + text));
         }
-        value = value.strip().toLowerCase(Locale.ROOT);
+        return Result.success(new EmailAddress(text.strip().toLowerCase(Locale.ROOT)));
     }
 }

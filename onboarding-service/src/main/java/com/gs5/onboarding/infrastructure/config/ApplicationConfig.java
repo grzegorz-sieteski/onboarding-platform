@@ -30,7 +30,9 @@ class ApplicationConfig {
 
     @Bean
     ScreeningSla screeningSla(ScreeningProperties properties) {
-        return new ScreeningSla(properties.timeout());
+        // a bad timeout in the configuration is a startup failure, not a business outcome
+        return ScreeningSla.of(properties.timeout())
+                .orElseThrow(error -> new IllegalStateException("app.screening.timeout: " + error.message()));
     }
 
     @Bean

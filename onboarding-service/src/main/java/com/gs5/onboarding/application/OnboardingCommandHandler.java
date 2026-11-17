@@ -5,16 +5,23 @@ import com.gs5.onboarding.domain.CustomerId;
 import com.gs5.onboarding.domain.CustomerOnboarding;
 import com.gs5.onboarding.domain.CustomerOnboardingRepository;
 import com.gs5.onboarding.domain.EligibilityPolicy;
-import com.gs5.onboarding.domain.EmailAddress;
-import com.gs5.onboarding.domain.OnboardingNotFoundException;
-import com.gs5.onboarding.domain.PersonName;
+import com.gs5.onboarding.domain.OnboardingError;
 import com.gs5.onboarding.domain.ScreeningSla;
+import com.gs5.onboarding.domain.shared.Result;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.interceptor.TransactionAspectSupport;
 
 import java.time.Clock;
+import java.util.function.Function;
 
-/** Application service: orchestrates use cases, owns the transaction boundary, holds no business rules. */
+/**
+ * Application service: orchestrates use cases, owns the transaction boundary, holds no business rules.
+ * <p>
+ * Every command answers with a {@link Result}. A command rejected by the domain writes nothing. A failed
+ * {@code save} may have written part of its work, and a transaction only rolls back on its own for an exception,
+ * so a failure is rolled back explicitly in {@link #persist(CustomerOnboarding)}.
+ */
 @Service
 public class OnboardingCommandHandler {
 
@@ -32,54 +39,54 @@ public class OnboardingCommandHandler {
     }
 
     @Transactional
-    public CustomerId handle(StartOnboardingCommand command) {
-        var applicant = new Applicant(
-                new PersonName(command.firstName(), command.lastName()),
-                new EmailAddress(command.email()),
-                command.dateOfBirth());
-        var onboarding = CustomerOnboarding.start(CustomerId.newId(), applicant, eligibilityPolicy, screeningSla,
-                clock);
-        onboardings.save(onboarding);
-        return onboarding.customerId();
+    public Result<CustomerId, OnboardingError> handle(StartOnboardingCommand command) {
+        return Applicant.of(command.firstName(), command.lastName(), command.email(), command.dateOfBirth())
+                .map(applicant -> CustomerOnboarding.start(CustomerId.newId(), applicant, eligibilityPolicy,
+                        screeningSla, clock))
+                .flatMap(this::persist);
     }
 
     @Transactional
-    public void handle(ConfirmScreeningClearedCommand command) {
-        CustomerOnboarding onboarding = load(command.customerId());
-        onboarding.confirmScreeningCleared(clock);
-        onboardings.save(onboarding);
+    public Result<CustomerId, OnboardingError> handle(ConfirmScreeningClearedCommand command) {
+        return update(command.customerId(), onboarding -> onboarding.confirmScreeningCleared(clock));
     }
 
     @Transactional
-    public void handle(EscalateOverdueScreeningCommand command) {
-        CustomerOnboarding onboarding = load(command.customerId());
-        onboarding.escalateIfScreeningOverdue(clock);
-        onboardings.save(onboarding);
+    public Result<CustomerId, OnboardingError> handle(EscalateOverdueScreeningCommand command) {
+        return update(command.customerId(), onboarding -> onboarding.escalateIfScreeningOverdue(clock));
     }
 
     @Transactional
-    public void handle(ApproveManualReviewCommand command) {
-        CustomerOnboarding onboarding = load(command.customerId());
-        onboarding.approveManualReview(command.reviewer(), command.comment(), clock);
-        onboardings.save(onboarding);
+    public Result<CustomerId, OnboardingError> handle(ApproveManualReviewCommand command) {
+        return update(command.customerId(),
+                onboarding -> onboarding.approveManualReview(command.reviewer(), command.comment(), clock));
     }
 
     @Transactional
-    public void handle(RejectManualReviewCommand command) {
-        CustomerOnboarding onboarding = load(command.customerId());
-        onboarding.rejectManualReview(command.reviewer(), command.reason(), clock);
-        onboardings.save(onboarding);
+    public Result<CustomerId, OnboardingError> handle(RejectManualReviewCommand command) {
+        return update(command.customerId(),
+                onboarding -> onboarding.rejectManualReview(command.reviewer(), command.reason(), clock));
     }
 
     @Transactional
-    public void handle(BanOnboardingCommand command) {
-        CustomerOnboarding onboarding = load(command.customerId());
-        onboarding.ban(command.reason(), clock);
-        onboardings.save(onboarding);
+    public Result<CustomerId, OnboardingError> handle(BanOnboardingCommand command) {
+        return update(command.customerId(), onboarding -> onboarding.ban(command.reason(), clock));
     }
 
-    private CustomerOnboarding load(CustomerId customerId) {
-        return onboardings.findById(customerId)
-                .orElseThrow(() -> new OnboardingNotFoundException(customerId));
+    private Result<CustomerId, OnboardingError> update(
+            CustomerId customerId, Function<CustomerOnboarding, Result<CustomerOnboarding, OnboardingError>> change) {
+        return onboardings.load(customerId)
+                .flatMap(change)
+                .flatMap(this::persist);
+    }
+
+    private Result<CustomerId, OnboardingError> persist(CustomerOnboarding onboarding) {
+        return switch (onboardings.save(onboarding)) {
+            case Result.Success(var saved) -> Result.success(saved.customerId());
+            case Result.Failure(var error) -> {
+                TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
+                yield Result.failure(error);
+            }
+        };
     }
 }

@@ -2,7 +2,8 @@ package com.gs5.onboarding.application;
 
 import com.gs5.onboarding.domain.CustomerId;
 import com.gs5.onboarding.domain.CustomerOnboardingRepository;
-import com.gs5.onboarding.domain.OnboardingNotFoundException;
+import com.gs5.onboarding.domain.OnboardingError;
+import com.gs5.onboarding.domain.shared.Result;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,10 +25,8 @@ public class OnboardingQueries {
     }
 
     @Transactional(readOnly = true)
-    public OnboardingView get(CustomerId customerId) {
-        return onboardings.findById(customerId)
-                .map(OnboardingView::of)
-                .orElseThrow(() -> new OnboardingNotFoundException(customerId));
+    public Result<OnboardingView, OnboardingError> get(CustomerId customerId) {
+        return onboardings.load(customerId).map(OnboardingView::of);
     }
 
     @Transactional(readOnly = true)

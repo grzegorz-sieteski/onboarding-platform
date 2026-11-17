@@ -1,12 +1,11 @@
 package com.gs5.onboarding.domain;
 
-public record EligibilityDecision(boolean eligible, String rejectionReason) {
+/** Verdict of the {@link EligibilityPolicy} - either eligible, or rejected with a reason. */
+public sealed interface EligibilityDecision {
 
-    public static EligibilityDecision approved() {
-        return new EligibilityDecision(true, null);
+    record Eligible() implements EligibilityDecision {
     }
 
-    public static EligibilityDecision rejected(String reason) {
-        return new EligibilityDecision(false, reason);
+    record Ineligible(String reason) implements EligibilityDecision {
     }
 }

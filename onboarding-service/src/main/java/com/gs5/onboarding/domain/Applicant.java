@@ -1,15 +1,20 @@
 package com.gs5.onboarding.domain;
 
-import com.gs5.onboarding.domain.shared.InvalidValueException;
+import com.gs5.onboarding.domain.OnboardingError.InvalidValue;
+import com.gs5.onboarding.domain.shared.Result;
 
 import java.time.LocalDate;
 
 /** Data submitted by a person who wants to become a customer. */
 public record Applicant(PersonName name, EmailAddress email, LocalDate dateOfBirth) {
 
-    public Applicant {
-        if (name == null || email == null || dateOfBirth == null) {
-            throw new InvalidValueException("Applicant requires name, e-mail and date of birth");
+    /** Entry point for untrusted input. The constructor is for already valid values. */
+    public static Result<Applicant, OnboardingError> of(String firstName, String lastName, String email,
+                                                        LocalDate dateOfBirth) {
+        if (dateOfBirth == null) {
+            return Result.failure(new InvalidValue("Date of birth must not be null"));
         }
+        return PersonName.of(firstName, lastName).flatMap(name ->
+                EmailAddress.of(email).map(address -> new Applicant(name, address, dateOfBirth)));
     }
 }

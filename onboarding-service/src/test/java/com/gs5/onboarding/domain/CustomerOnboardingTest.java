@@ -1,5 +1,7 @@
 package com.gs5.onboarding.domain;
 
+import com.gs5.onboarding.domain.OnboardingError.IllegalTransition;
+import com.gs5.onboarding.domain.OnboardingError.InvalidValue;
 import com.gs5.onboarding.domain.OnboardingEvent.ApplicantVerified;
 import com.gs5.onboarding.domain.OnboardingEvent.CustomerOnboarded;
 import com.gs5.onboarding.domain.OnboardingEvent.ManualReviewApproved;
@@ -8,7 +10,7 @@ import com.gs5.onboarding.domain.OnboardingEvent.ManualReviewRequested;
 import com.gs5.onboarding.domain.OnboardingEvent.OnboardingBanned;
 import com.gs5.onboarding.domain.OnboardingEvent.OnboardingRejected;
 import com.gs5.onboarding.domain.OnboardingEvent.OnboardingStarted;
-import com.gs5.onboarding.domain.shared.InvalidValueException;
+import com.gs5.onboarding.domain.shared.Result;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
@@ -20,7 +22,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.fail;
 
 class CustomerOnboardingTest {
 
@@ -55,8 +57,9 @@ class CustomerOnboardingTest {
     void activatesCustomerOnlyAfterScreeningCleared() {
         CustomerOnboarding onboarding = committed(startFor(ADULT));
 
-        onboarding.confirmScreeningCleared(CLOCK);
+        Result<CustomerOnboarding, OnboardingError> result = onboarding.confirmScreeningCleared(CLOCK);
 
+        assertThat(valueOf(result)).isSameAs(onboarding);
         assertThat(onboarding.uncommittedEvents()).singleElement().isInstanceOf(CustomerOnboarded.class);
         assertThat(onboarding.status()).isEqualTo(OnboardingStatus.ONBOARDED);
     }
@@ -67,8 +70,9 @@ class CustomerOnboardingTest {
         onboarding.confirmScreeningCleared(CLOCK);
         committed(onboarding);
 
-        onboarding.confirmScreeningCleared(CLOCK);
+        Result<CustomerOnboarding, OnboardingError> result = onboarding.confirmScreeningCleared(CLOCK);
 
+        assertThat(result.<Boolean>fold(_ -> true, _ -> false)).isTrue();
         assertThat(onboarding.uncommittedEvents()).isEmpty();
     }
 
@@ -127,8 +131,10 @@ class CustomerOnboardingTest {
     void officerApprovesManualReview() {
         CustomerOnboarding onboarding = escalated();
 
-        onboarding.approveManualReview("officer.anna", "Documents verified by phone", AFTER_DEADLINE);
+        Result<CustomerOnboarding, OnboardingError> result =
+                onboarding.approveManualReview("officer.anna", "Documents verified by phone", AFTER_DEADLINE);
 
+        assertThat(valueOf(result)).isSameAs(onboarding);
         assertThat(onboarding.uncommittedEvents())
                 .hasExactlyElementsOfTypes(ManualReviewApproved.class, CustomerOnboarded.class);
         assertThat(onboarding.status()).isEqualTo(OnboardingStatus.ONBOARDED);
@@ -150,8 +156,34 @@ class CustomerOnboardingTest {
     void cannotDecideManualReviewThatWasNotRequested() {
         CustomerOnboarding onboarding = committed(startFor(ADULT));
 
-        assertThatThrownBy(() -> onboarding.approveManualReview("officer.anna", null, CLOCK))
-                .isInstanceOf(IllegalOnboardingTransitionException.class);
+        Result<CustomerOnboarding, OnboardingError> result = onboarding.approveManualReview("officer.anna", null, CLOCK);
+
+        assertThat(failureOf(result)).isEqualTo(
+                new IllegalTransition(onboarding.customerId(), OnboardingStatus.PENDING_SCREENING, "approve"));
+        assertThat(onboarding.uncommittedEvents()).isEmpty();
+    }
+
+    @Test
+    void rejectedCommandRaisesNoEventAndLeavesTheOnboardingUntouched() {
+        CustomerOnboarding onboarding = escalated();
+
+        assertThat(failureOf(onboarding.approveManualReview("  ", "ok", AFTER_DEADLINE)))
+                .isInstanceOf(InvalidValue.class);
+        assertThat(failureOf(onboarding.rejectManualReview("officer.anna", null, AFTER_DEADLINE)))
+                .isInstanceOf(InvalidValue.class);
+
+        assertThat(onboarding.uncommittedEvents()).isEmpty();
+        assertThat(onboarding.status()).isEqualTo(OnboardingStatus.MANUAL_REVIEW);
+    }
+
+    @Test
+    void banRequiresAReason() {
+        CustomerOnboarding onboarding = committed(startFor(ADULT));
+
+        assertThat(failureOf(onboarding.ban(" ", CLOCK))).isInstanceOf(InvalidValue.class);
+
+        assertThat(onboarding.uncommittedEvents()).isEmpty();
+        assertThat(onboarding.status()).isEqualTo(OnboardingStatus.PENDING_SCREENING);
     }
 
     @Test
@@ -171,8 +203,8 @@ class CustomerOnboardingTest {
         onboarding.ban("Surname on blacklist", AFTER_DEADLINE);
 
         assertThat(onboarding.status()).isEqualTo(OnboardingStatus.BANNED);
-        assertThatThrownBy(() -> onboarding.approveManualReview("officer.anna", null, AFTER_DEADLINE))
-                .isInstanceOf(IllegalOnboardingTransitionException.class);
+        assertThat(failureOf(onboarding.approveManualReview("officer.anna", null, AFTER_DEADLINE)))
+                .isInstanceOf(IllegalTransition.class);
     }
 
     @Test
@@ -228,22 +260,20 @@ class CustomerOnboardingTest {
                 new ApplicantVerified(id, SLA.deadlineFor(CLOCK.instant()), CLOCK.instant()),
                 new CustomerOnboarded(id, CLOCK.instant()));
 
-        CustomerOnboarding onboarding = CustomerOnboarding.rehydrate(history);
-
-        assertThat(onboarding.status()).isEqualTo(OnboardingStatus.ONBOARDED);
-        assertThat(onboarding.version()).isEqualTo(3);
-        assertThat(onboarding.uncommittedEvents()).isEmpty();
+        assertThat(CustomerOnboarding.rehydrate(history)).hasValueSatisfying(onboarding -> {
+            assertThat(onboarding.status()).isEqualTo(OnboardingStatus.ONBOARDED);
+            assertThat(onboarding.version()).isEqualTo(3);
+            assertThat(onboarding.uncommittedEvents()).isEmpty();
+        });
     }
 
     @Test
-    void refusesInvalidPersonName() {
-        assertThatThrownBy(() -> new PersonName("Jan", "N0wak!"))
-                .isInstanceOf(InvalidValueException.class);
+    void emptyHistoryMeansThereIsNoOnboarding() {
+        assertThat(CustomerOnboarding.rehydrate(List.of())).isEmpty();
     }
 
     private static CustomerOnboarding startFor(LocalDate dateOfBirth) {
-        var applicant = new Applicant(new PersonName("Jan", "Nowak"), new EmailAddress("Jan@Example.com"),
-                dateOfBirth);
+        Applicant applicant = valueOf(Applicant.of("Jan", "Nowak", "Jan@Example.com", dateOfBirth));
         return CustomerOnboarding.start(CustomerId.newId(), applicant, POLICY, SLA, CLOCK);
     }
 
@@ -256,5 +286,19 @@ class CustomerOnboardingTest {
     private static CustomerOnboarding committed(CustomerOnboarding onboarding) {
         onboarding.markEventsAsCommitted();
         return onboarding;
+    }
+
+    static <T> T valueOf(Result<T, OnboardingError> result) {
+        return switch (result) {
+            case Result.Success<T, OnboardingError>(var value) -> value;
+            case Result.Failure<T, OnboardingError>(var error) -> fail("expected a value but got " + error);
+        };
+    }
+
+    static <T> OnboardingError failureOf(Result<T, OnboardingError> result) {
+        return switch (result) {
+            case Result.Failure<T, OnboardingError>(var error) -> error;
+            case Result.Success<T, OnboardingError>(var value) -> fail("expected a failure but got " + value);
+        };
     }
 }

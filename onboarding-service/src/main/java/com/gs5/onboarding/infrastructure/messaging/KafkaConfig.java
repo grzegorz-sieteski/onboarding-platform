@@ -1,6 +1,5 @@
 package com.gs5.onboarding.infrastructure.messaging;
 
-import com.gs5.onboarding.domain.shared.DomainException;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.common.TopicPartition;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -42,7 +41,7 @@ class KafkaConfig {
                 new TopicPartition(properties.deadLetterTopicOf(record.topic()), PARTITION_CHOSEN_BY_KEY));
         var errorHandler = new DefaultErrorHandler(recoverer,
                 new FixedBackOff(properties.retryInterval().toMillis(), properties.maxRetries()));
-        errorHandler.addNotRetryableExceptions(MalformedMessageException.class, DomainException.class);
+        errorHandler.addNotRetryableExceptions(RejectedMessageException.class);
         return errorHandler;
     }
 

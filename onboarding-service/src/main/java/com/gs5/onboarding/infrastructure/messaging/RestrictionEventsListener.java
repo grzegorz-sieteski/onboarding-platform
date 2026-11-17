@@ -32,14 +32,16 @@ class RestrictionEventsListener {
 
     @KafkaListener(topics = "${app.kafka.topics.restriction-events}")
     void on(ConsumerRecord<String, String> record) {
-        IntegrationEvent event = codec.decode(record.value());
+        IntegrationEvent event = codec.decode(record.value()).orElseThrow(InboundFailures::unusable);
         if (!CLIENT_BANNED.equals(event.eventType())) {
             log.debug("Ignoring {} - not relevant for onboarding", event.eventType());
             return;
         }
-        ClientBannedV1 clientBanned = codec.payloadOf(event, ClientBannedV1.class);
-        inbox.processOnce(event.eventId(), () -> commands.handle(
-                new BanOnboardingCommand(CustomerId.of(clientBanned.customerId()), clientBanned.reason())));
+        ClientBannedV1 clientBanned = codec.payloadOf(event, ClientBannedV1.class)
+                .orElseThrow(InboundFailures::unusable);
+        inbox.processOnce(event.eventId(), () -> CustomerId.of(clientBanned.customerId())
+                .flatMap(id -> commands.handle(new BanOnboardingCommand(id, clientBanned.reason())))
+                .orElseThrow(InboundFailures::refused));
     }
 
     /** This context's own view of the upstream contract - only the fields it needs (tolerant reader). */

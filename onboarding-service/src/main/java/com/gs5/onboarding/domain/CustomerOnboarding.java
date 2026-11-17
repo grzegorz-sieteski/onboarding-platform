@@ -1,5 +1,9 @@
 package com.gs5.onboarding.domain;
 
+import com.gs5.onboarding.domain.EligibilityDecision.Eligible;
+import com.gs5.onboarding.domain.EligibilityDecision.Ineligible;
+import com.gs5.onboarding.domain.OnboardingError.IllegalTransition;
+import com.gs5.onboarding.domain.OnboardingError.InvalidValue;
 import com.gs5.onboarding.domain.OnboardingEvent.ApplicantVerified;
 import com.gs5.onboarding.domain.OnboardingEvent.CustomerOnboarded;
 import com.gs5.onboarding.domain.OnboardingEvent.ManualReviewApproved;
@@ -9,7 +13,7 @@ import com.gs5.onboarding.domain.OnboardingEvent.OnboardingBanned;
 import com.gs5.onboarding.domain.OnboardingEvent.OnboardingRejected;
 import com.gs5.onboarding.domain.OnboardingEvent.OnboardingStarted;
 import com.gs5.onboarding.domain.shared.EventSourcedAggregate;
-import com.gs5.onboarding.domain.shared.InvalidValueException;
+import com.gs5.onboarding.domain.shared.Result;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -42,6 +46,8 @@ import static com.gs5.onboarding.domain.OnboardingStatus.REJECTED;
  *     so Kafka gives no ordering between them - the state machine makes the outcome order-independent,</li>
  *     <li>repeating a ban, a clearance or an escalation has no effect (idempotency for at-least-once delivery).</li>
  * </ul>
+ * Commands return a {@link Result}. A rejected command raises no event and leaves the aggregate untouched, so a
+ * failure never needs to be undone.
  */
 public final class CustomerOnboarding extends EventSourcedAggregate<OnboardingEvent> {
 
@@ -64,80 +70,99 @@ public final class CustomerOnboarding extends EventSourcedAggregate<OnboardingEv
         return onboarding;
     }
 
-    public static CustomerOnboarding rehydrate(List<OnboardingEvent> history) {
+    /** An empty history means there is no such onboarding. */
+    public static Optional<CustomerOnboarding> rehydrate(List<OnboardingEvent> history) {
         if (history.isEmpty()) {
-            throw new IllegalArgumentException("Cannot rehydrate an onboarding from an empty history");
+            return Optional.empty();
         }
         var onboarding = new CustomerOnboarding();
         onboarding.replay(history);
-        return onboarding;
+        return Optional.of(onboarding);
     }
 
     /** Late or duplicate verdicts for an already decided onboarding are ignored. */
-    public void confirmScreeningCleared(Clock clock) {
-        switch (status) {
-            case PENDING_SCREENING, MANUAL_REVIEW -> raise(new CustomerOnboarded(customerId.value(), clock.instant()));
-            case ONBOARDED, REJECTED, BANNED -> {
-                // already decided
+    public Result<CustomerOnboarding, OnboardingError> confirmScreeningCleared(Clock clock) {
+        return switch (status) {
+            case PENDING_SCREENING, MANUAL_REVIEW -> {
+                raise(new CustomerOnboarded(customerId.value(), clock.instant()));
+                yield accepted();
             }
-            case PENDING_VERIFICATION -> throw new IllegalOnboardingTransitionException(customerId, status, "activate");
-        }
+            case ONBOARDED, REJECTED, BANNED -> accepted();
+            case PENDING_VERIFICATION -> illegalTransition("activate");
+        };
     }
 
     /** Safe to call at any time - only an onboarding that is still waiting past its deadline gets escalated. */
-    public void escalateIfScreeningOverdue(Clock clock) {
+    public Result<CustomerOnboarding, OnboardingError> escalateIfScreeningOverdue(Clock clock) {
         Instant now = clock.instant();
-        if (status != PENDING_SCREENING || now.isBefore(screeningDueAt)) {
-            return;
+        if (status == PENDING_SCREENING && !now.isBefore(screeningDueAt)) {
+            raise(new ManualReviewRequested(customerId.value(), "Screening not completed by " + screeningDueAt, now));
         }
-        raise(new ManualReviewRequested(customerId.value(),
-                "Screening not completed by " + screeningDueAt, now));
+        return accepted();
     }
 
-    public void approveManualReview(String reviewer, String comment, Clock clock) {
-        requireStatus(MANUAL_REVIEW, "approve");
-        Instant now = clock.instant();
-        raise(new ManualReviewApproved(customerId.value(), requireText(reviewer, "Reviewer"), comment, now));
-        raise(new CustomerOnboarded(customerId.value(), now));
+    public Result<CustomerOnboarding, OnboardingError> approveManualReview(String reviewer, String comment,
+                                                                           Clock clock) {
+        return requireStatus(MANUAL_REVIEW, "approve")
+                .flatMap(_ -> requireText(reviewer, "Reviewer"))
+                .map(validReviewer -> {
+                    Instant now = clock.instant();
+                    raise(new ManualReviewApproved(customerId.value(), validReviewer, comment, now));
+                    raise(new CustomerOnboarded(customerId.value(), now));
+                    return this;
+                });
     }
 
-    public void rejectManualReview(String reviewer, String reason, Clock clock) {
-        requireStatus(MANUAL_REVIEW, "reject");
-        Instant now = clock.instant();
-        String rejectionReason = requireText(reason, "Rejection reason");
-        raise(new ManualReviewRejected(customerId.value(), requireText(reviewer, "Reviewer"), rejectionReason, now));
-        raise(new OnboardingRejected(customerId.value(), "Manual review: " + rejectionReason, now));
+    public Result<CustomerOnboarding, OnboardingError> rejectManualReview(String reviewer, String reason,
+                                                                          Clock clock) {
+        return requireStatus(MANUAL_REVIEW, "reject")
+                .flatMap(_ -> requireText(reviewer, "Reviewer"))
+                .flatMap(validReviewer -> requireText(reason, "Rejection reason")
+                        .map(validReason -> {
+                            Instant now = clock.instant();
+                            raise(new ManualReviewRejected(customerId.value(), validReviewer, validReason, now));
+                            raise(new OnboardingRejected(customerId.value(), "Manual review: " + validReason, now));
+                            return this;
+                        }));
     }
 
-    public void ban(String reason, Clock clock) {
+    public Result<CustomerOnboarding, OnboardingError> ban(String reason, Clock clock) {
         if (status == BANNED) {
-            return;
+            return accepted();
         }
-        raise(new OnboardingBanned(customerId.value(), requireText(reason, "Ban reason"), clock.instant()));
+        return requireText(reason, "Ban reason").map(validReason -> {
+            raise(new OnboardingBanned(customerId.value(), validReason, clock.instant()));
+            return this;
+        });
     }
 
     private void verify(EligibilityPolicy policy, ScreeningSla screeningSla, LocalDate today, Instant now) {
-        EligibilityDecision decision = policy.evaluate(applicant, today);
-        if (decision.eligible()) {
-            raise(new ApplicantVerified(customerId.value(), screeningSla.deadlineFor(now), now));
-        } else {
-            raise(new OnboardingRejected(customerId.value(), decision.rejectionReason(), now));
+        switch (policy.evaluate(applicant, today)) {
+            case Eligible() -> raise(new ApplicantVerified(customerId.value(), screeningSla.deadlineFor(now), now));
+            case Ineligible(var reason) -> raise(new OnboardingRejected(customerId.value(), reason, now));
         }
     }
 
-    private void requireStatus(OnboardingStatus required, String action) {
-        if (status != required) {
-            throw new IllegalOnboardingTransitionException(customerId, status, action);
-        }
+    private Result<CustomerOnboarding, OnboardingError> accepted() {
+        return Result.success(this);
     }
 
-    private static String requireText(String value, String label) {
-        if (value == null || value.isBlank()) {
-            throw new InvalidValueException(label + " must not be blank");
-        }
-        return value.strip();
+    private Result<CustomerOnboarding, OnboardingError> illegalTransition(String action) {
+        return Result.failure(new IllegalTransition(customerId, status, action));
     }
 
+    private Result<CustomerOnboarding, OnboardingError> requireStatus(OnboardingStatus required, String action) {
+        return status == required ? accepted() : illegalTransition(action);
+    }
+
+    private static Result<String, OnboardingError> requireText(String text, String label) {
+        if (text == null || text.isBlank()) {
+            return Result.failure(new InvalidValue(label + " must not be blank"));
+        }
+        return Result.success(text.strip());
+    }
+
+    /** Replays trusted history: events were validated when they were raised, so no validation happens here. */
     @Override
     protected void apply(OnboardingEvent event) {
         switch (event) {
@@ -152,13 +177,10 @@ public final class CustomerOnboarding extends EventSourcedAggregate<OnboardingEv
                 transitionTo(PENDING_SCREENING, null);
             }
             case ManualReviewRequested escalated -> transitionTo(MANUAL_REVIEW, escalated.reason());
-            case ManualReviewApproved approved -> {
-                // audit only - CustomerOnboarded follows
+            case ManualReviewApproved _, ManualReviewRejected _ -> {
+                // audit only - the state change is the CustomerOnboarded / OnboardingRejected that follows
             }
-            case ManualReviewRejected rejected -> {
-                // audit only - OnboardingRejected follows
-            }
-            case CustomerOnboarded onboarded -> transitionTo(ONBOARDED, null);
+            case CustomerOnboarded _ -> transitionTo(ONBOARDED, null);
             case OnboardingRejected rejected -> transitionTo(REJECTED, rejected.reason());
             case OnboardingBanned banned -> transitionTo(BANNED, banned.reason());
         }

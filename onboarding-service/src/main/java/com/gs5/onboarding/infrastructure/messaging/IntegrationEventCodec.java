@@ -1,9 +1,10 @@
 package com.gs5.onboarding.infrastructure.messaging;
 
+import com.gs5.onboarding.domain.shared.Result;
 import com.gs5.onboarding.infrastructure.outbox.OutboxMessage;
+import org.springframework.stereotype.Component;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
-import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -17,36 +18,38 @@ public class IntegrationEventCodec {
         this.objectMapper = objectMapper;
     }
 
+    /** Our own event is always serializable; a failure here is a bug and is allowed to surface as one. */
     public OutboxMessage encode(String topic, String eventType, String aggregateId, long aggregateVersion,
                                 Instant occurredAt, Object payload) {
         var event = new IntegrationEvent(UUID.randomUUID(), eventType, aggregateId, aggregateVersion, occurredAt,
                 objectMapper.valueToTree(payload));
-        try {
-            return new OutboxMessage(event.eventId(), topic, aggregateId, eventType,
-                    objectMapper.writeValueAsString(event));
-        } catch (JacksonException e) {
-            throw new IllegalStateException("Cannot serialize integration event " + eventType, e);
-        }
+        return new OutboxMessage(event.eventId(), topic, aggregateId, eventType,
+                objectMapper.writeValueAsString(event));
     }
 
-    public IntegrationEvent decode(String json) {
-        try {
-            IntegrationEvent event = objectMapper.readValue(json, IntegrationEvent.class);
-            if (event.eventId() == null || event.eventType() == null || event.payload() == null) {
-                throw new MalformedMessageException("Incomplete integration event envelope: " + json, null);
-            }
-            return event;
-        } catch (JacksonException e) {
-            throw new MalformedMessageException("Not an integration event: " + json, e);
+    /** Input from another service is untrusted: a message that cannot be understood is a value, not an exception. */
+    public Result<IntegrationEvent, String> decode(String json) {
+        if (json == null) {
+            return Result.failure("Empty message");
         }
+        IntegrationEvent event;
+        try {
+            event = objectMapper.readValue(json, IntegrationEvent.class);
+        } catch (JacksonException _) {
+            return Result.failure("Not an integration event: " + json);
+        }
+        if (event.eventId() == null || event.eventType() == null || event.payload() == null) {
+            return Result.failure("Incomplete integration event envelope: " + json);
+        }
+        return Result.success(event);
     }
 
-    public <T> T payloadOf(IntegrationEvent event, Class<T> contract) {
+    public <T> Result<T, String> payloadOf(IntegrationEvent event, Class<T> contract) {
         try {
-            return objectMapper.treeToValue(event.payload(), contract);
-        } catch (JacksonException | IllegalArgumentException e) {
-            throw new MalformedMessageException("Payload of %s does not match %s"
-                    .formatted(event.eventId(), contract.getSimpleName()), e);
+            return Result.success(objectMapper.treeToValue(event.payload(), contract));
+        } catch (JacksonException | IllegalArgumentException _) {
+            return Result.failure("Payload of %s does not match %s"
+                    .formatted(event.eventId(), contract.getSimpleName()));
         }
     }
 }
