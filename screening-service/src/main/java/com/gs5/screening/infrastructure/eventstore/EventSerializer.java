@@ -1,6 +1,7 @@
 package com.gs5.screening.infrastructure.eventstore;
 
 import com.gs5.screening.domain.shared.DomainEvent;
+import com.gs5.screening.domain.shared.Result;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
@@ -20,6 +21,7 @@ public final class EventSerializer<E extends DomainEvent> {
 
     public EventSerializer(ObjectMapper objectMapper, Class<E> sealedEventType) {
         if (!sealedEventType.isSealed()) {
+            // wiring mistake, caught when the application starts
             throw new IllegalArgumentException(sealedEventType + " must be a sealed interface");
         }
         this.objectMapper = objectMapper;
@@ -28,26 +30,24 @@ public final class EventSerializer<E extends DomainEvent> {
                 .collect(Collectors.toUnmodifiableMap(Class::getSimpleName, Function.identity()));
     }
 
+    /** Our own event is always serializable; a failure here is a bug and is allowed to surface as one. */
     public NewEvent toNewEvent(E event) {
-        try {
-            return new NewEvent(event.getClass().getSimpleName(), objectMapper.writeValueAsString(event),
-                    event.occurredAt());
-        } catch (JacksonException e) {
-            throw new IllegalStateException("Cannot serialize event " + event, e);
-        }
+        return new NewEvent(event.getClass().getSimpleName(), objectMapper.writeValueAsString(event),
+                event.occurredAt());
     }
 
-    public E deserialize(StoredEvent storedEvent) {
+    /** The failure reason is meant for an operator: the stored event cannot be turned back into a domain event. */
+    public Result<E, String> deserialize(StoredEvent storedEvent) {
         Class<? extends E> type = eventTypesByName.get(storedEvent.type());
         if (type == null) {
-            throw new IllegalStateException("Unknown event type in stream %s: %s"
-                    .formatted(storedEvent.streamId(), storedEvent.type()));
+            return Result.failure("unknown event type %s at version %d"
+                    .formatted(storedEvent.type(), storedEvent.version()));
         }
         try {
-            return objectMapper.readValue(storedEvent.payload(), type);
+            return Result.success(objectMapper.readValue(storedEvent.payload(), type));
         } catch (JacksonException e) {
-            throw new IllegalStateException("Corrupted event %s v%d".formatted(storedEvent.streamId(),
-                    storedEvent.version()), e);
+            return Result.failure("event %s at version %d cannot be read: %s"
+                    .formatted(storedEvent.type(), storedEvent.version(), e.getMessage()));
         }
     }
 }

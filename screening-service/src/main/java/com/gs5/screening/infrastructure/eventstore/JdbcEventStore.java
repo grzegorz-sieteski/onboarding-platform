@@ -1,5 +1,6 @@
 package com.gs5.screening.infrastructure.eventstore;
 
+import com.gs5.screening.domain.shared.Result;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Component;
@@ -12,7 +13,7 @@ import java.util.List;
  * Append-only event store on a relational database.
  * <p>
  * Optimistic concurrency: the unique constraint on {@code (stream_id, stream_version)} guarantees that two writers
- * that loaded the same version cannot both append - the second one gets {@link ConcurrencyConflictException}.
+ * that loaded the same version cannot both append - the second one gets a {@link StreamConflict}.
  * This is also what keeps events of a single aggregate totally ordered.
  */
 @Component
@@ -48,28 +49,39 @@ public class JdbcEventStore {
                 .single() > 0;
     }
 
-    public void append(String streamId, long expectedVersion, List<NewEvent> events) {
+    /**
+     * Appends the events one after another and stops at the first version that is already taken.
+     * <p>
+     * A lost race is an expected outcome, so it is a value. Nothing is rolled back here: after a failed statement
+     * the database (PostgreSQL does) may already have aborted the transaction, and the events written before the
+     * conflict are still in it. The caller owns the transaction and has to roll it back.
+     */
+    public Result<Void, StreamConflict> append(String streamId, long expectedVersion, List<NewEvent> events) {
         long version = expectedVersion;
         for (NewEvent event : events) {
             version++;
-            try {
-                insert(streamId, version, event);
-            } catch (DuplicateKeyException e) {
-                throw new ConcurrencyConflictException(streamId, expectedVersion, e);
+            if (!insert(streamId, version, event)) {
+                return Result.failure(new StreamConflict(streamId, expectedVersion));
             }
         }
+        return Result.success(null);
     }
 
-    private void insert(String streamId, long version, NewEvent event) {
-        jdbc.sql("""
-                        INSERT INTO event_store (stream_id, stream_version, event_type, payload, occurred_at)
-                        VALUES (:streamId, :version, :type, :payload, :occurredAt)
-                        """)
-                .param("streamId", streamId)
-                .param("version", version)
-                .param("type", event.type())
-                .param("payload", event.payload())
-                .param("occurredAt", OffsetDateTime.ofInstant(event.occurredAt(), ZoneOffset.UTC))
-                .update();
+    private boolean insert(String streamId, long version, NewEvent event) {
+        try {
+            jdbc.sql("""
+                            INSERT INTO event_store (stream_id, stream_version, event_type, payload, occurred_at)
+                            VALUES (:streamId, :version, :type, :payload, :occurredAt)
+                            """)
+                    .param("streamId", streamId)
+                    .param("version", version)
+                    .param("type", event.type())
+                    .param("payload", event.payload())
+                    .param("occurredAt", OffsetDateTime.ofInstant(event.occurredAt(), ZoneOffset.UTC))
+                    .update();
+            return true;
+        } catch (DuplicateKeyException _) {
+            return false;
+        }
     }
 }

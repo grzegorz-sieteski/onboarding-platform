@@ -3,6 +3,7 @@ package com.gs5.screening.domain;
 import com.gs5.screening.domain.ScreeningEvent.BlacklistMatchFound;
 import com.gs5.screening.domain.ScreeningEvent.ScreeningPassed;
 import com.gs5.screening.domain.ScreeningEvent.ScreeningRequested;
+import com.gs5.screening.domain.shared.Result;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
@@ -13,6 +14,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.fail;
 
 class ScreeningCaseTest {
 
@@ -31,7 +33,7 @@ class ScreeningCaseTest {
 
     @Test
     void restrictsCustomerWhoseSurnameMatchesBlacklistEntry() {
-        blacklist.add(new BlacklistEntry(new Surname("Michałowski"), "Sanctions list EU-2026/17"));
+        blacklist.add(valueOf(BlacklistEntry.of("Michałowski", "Sanctions list EU-2026/17")));
 
         ScreeningCase screening = screen("Adam", "MICHALOWSKI");
 
@@ -43,18 +45,37 @@ class ScreeningCaseTest {
 
     @Test
     void rehydratesFromHistory() {
-        blacklist.add(new BlacklistEntry(new Surname("Kowalski"), "Fraud"));
+        blacklist.add(valueOf(BlacklistEntry.of("Kowalski", "Fraud")));
         List<ScreeningEvent> history = screen("Jan", "Kowalski").uncommittedEvents();
 
-        ScreeningCase rehydrated = ScreeningCase.rehydrate(history);
+        assertThat(ScreeningCase.rehydrate(history)).hasValueSatisfying(rehydrated -> {
+            assertThat(rehydrated.status()).isEqualTo(ScreeningStatus.RESTRICTED);
+            assertThat(rehydrated.version()).isEqualTo(2);
+        });
+    }
 
-        assertThat(rehydrated.status()).isEqualTo(ScreeningStatus.RESTRICTED);
-        assertThat(rehydrated.version()).isEqualTo(2);
+    @Test
+    void emptyHistoryMeansThereIsNoScreening() {
+        assertThat(ScreeningCase.rehydrate(List.of())).isEmpty();
     }
 
     private ScreeningCase screen(String firstName, String lastName) {
-        return ScreeningCase.screen(CustomerId.newId(), new ScreenedPerson(firstName, new Surname(lastName)),
+        return ScreeningCase.screen(CustomerId.newId(), valueOf(ScreenedPerson.of(firstName, lastName)),
                 blacklist, CLOCK);
+    }
+
+    static <T> T valueOf(Result<T, ScreeningError> result) {
+        return switch (result) {
+            case Result.Success<T, ScreeningError>(var value) -> value;
+            case Result.Failure<T, ScreeningError>(var error) -> fail("expected a value but got " + error);
+        };
+    }
+
+    static <T> ScreeningError failureOf(Result<T, ScreeningError> result) {
+        return switch (result) {
+            case Result.Failure<T, ScreeningError>(var error) -> error;
+            case Result.Success<T, ScreeningError>(var value) -> fail("expected a failure but got " + value);
+        };
     }
 
     private static final class InMemoryBlacklist implements Blacklist {

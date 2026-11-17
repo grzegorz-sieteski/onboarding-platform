@@ -29,14 +29,16 @@ class OnboardingEventsListener {
 
     @KafkaListener(topics = "${app.kafka.topics.onboarding-events}")
     void on(ConsumerRecord<String, String> record) {
-        IntegrationEvent event = codec.decode(record.value());
+        IntegrationEvent event = codec.decode(record.value()).orElseThrow(InboundFailures::unusable);
         if (!APPLICANT_VERIFIED.equals(event.eventType())) {
             log.debug("Ignoring {} - not relevant for screening", event.eventType());
             return;
         }
-        ApplicantVerifiedV1 verified = codec.payloadOf(event, ApplicantVerifiedV1.class);
-        inbox.processOnce(event.eventId(), () -> commands.handle(new ScreenCustomerCommand(
-                CustomerId.of(verified.customerId()), verified.firstName(), verified.lastName())));
+        ApplicantVerifiedV1 verified = codec.payloadOf(event, ApplicantVerifiedV1.class)
+                .orElseThrow(InboundFailures::unusable);
+        inbox.processOnce(event.eventId(), () -> CustomerId.of(verified.customerId())
+                .flatMap(id -> commands.handle(new ScreenCustomerCommand(id, verified.firstName(), verified.lastName())))
+                .orElseThrow(InboundFailures::refused));
     }
 
     /** This context's own view of the upstream contract - only the fields it needs (tolerant reader). */

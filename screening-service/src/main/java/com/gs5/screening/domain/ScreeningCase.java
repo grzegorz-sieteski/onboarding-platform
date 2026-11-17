@@ -36,15 +36,17 @@ public final class ScreeningCase extends EventSourcedAggregate<ScreeningEvent> {
         return screening;
     }
 
-    public static ScreeningCase rehydrate(List<ScreeningEvent> history) {
+    /** An empty history means there is no such screening. */
+    public static Optional<ScreeningCase> rehydrate(List<ScreeningEvent> history) {
         if (history.isEmpty()) {
-            throw new IllegalArgumentException("Cannot rehydrate a screening case from an empty history");
+            return Optional.empty();
         }
         var screening = new ScreeningCase();
         screening.replay(history);
-        return screening;
+        return Optional.of(screening);
     }
 
+    /** Replays trusted history: events were validated when they were raised, so no validation happens here. */
     @Override
     protected void apply(ScreeningEvent event) {
         switch (event) {
@@ -53,7 +55,7 @@ public final class ScreeningCase extends EventSourcedAggregate<ScreeningEvent> {
                 person = new ScreenedPerson(requested.firstName(), new Surname(requested.lastName()));
                 status = ScreeningStatus.IN_PROGRESS;
             }
-            case ScreeningPassed passed -> status = ScreeningStatus.CLEARED;
+            case ScreeningPassed _ -> status = ScreeningStatus.CLEARED;
             case BlacklistMatchFound match -> {
                 status = ScreeningStatus.RESTRICTED;
                 restrictionReason = match.reason();
