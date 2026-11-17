@@ -1,6 +1,6 @@
 # Onboarding Platform: 3 mikroserwisy, DDD, Event Sourcing, Kafka
 
-Trzy niezależne serwisy Spring Boot (Java 21, Spring Boot 3.5) współpracują przez Kafkę w modelu **choreografii**.
+Trzy niezależne serwisy Spring Boot (Java 25, Spring Boot 4.1) współpracują przez Kafkę w modelu **choreografii**.
 Nie ma tu centralnego orkiestratora: każdy serwis reaguje na fakty opublikowane przez inny.
 
 ```
@@ -79,7 +79,7 @@ Mapowanie robią klasy `*IntegrationEvents`. Zdarzenia czysto wewnętrzne, np. `
 ## Architektura serwisu (clean / hexagonal)
 
 ```
-com.example.<context>
+com.gs5.<context>
 ├── domain/            czysta Java, zero Springa: agregaty, VO, zdarzenia (sealed), polityki, porty
 │   └── shared/        EventSourcedAggregate, DomainEvent, DomainException
 ├── application/       use case'y (command handler + queries), granica transakcji
