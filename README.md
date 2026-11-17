@@ -81,7 +81,7 @@ Mapowanie robią klasy `*IntegrationEvents`. Zdarzenia czysto wewnętrzne, np. `
 ```
 com.gs5.<context>
 ├── domain/            czysta Java, zero Springa: agregaty, VO, zdarzenia (sealed), polityki, porty
-│   └── shared/        EventSourcedAggregate, DomainEvent, DomainException
+│   └── shared/        EventSourcedAggregate, DomainEvent, Result<T, E>
 ├── application/       use case'y (command handler + queries), granica transakcji
 └── infrastructure/
     ├── eventstore/    JdbcEventStore (optimistic concurrency), EventSerializer (rejestr z sealed interface)
@@ -91,6 +91,31 @@ com.gs5.<context>
     ├── web/           REST + ProblemDetail
     └── config/
 ```
+
+## Błędy to wartości, nie wyjątki (`Result<T, E>`)
+
+Wynik każdej operacji, która może się nie udać, to `Result<T, E>`. Jest to `sealed interface` z dwoma rekordami (`Success`, `Failure`),
+a błąd `E` to osobny `sealed interface` rekordów dla każdego kontekstu: `OnboardingError`, `ScreeningError`, `RestrictionError`.
+
+```java
+switch (commands.handle(command)) {
+    case Result.Success(var customerId) -> ResponseEntity.ok(customerId);
+    case Result.Failure(var error)      -> problemFor(error);   // switch po sealed OnboardingError: exhaustive
+}
+```
+
+- **Domena i aplikacja nie rzucają wyjątków.** Value objecty walidują w fabrykach `of(...)` (`EmailAddress.of`, `Surname.of`, `CustomerId.of`...),
+  komendy agregatu zwracają `Result`, a command handler i repozytorium też. Odrzucona komenda nie tworzy zdarzenia ani nie zmienia agregatu.
+- **Dodanie nowego błędu przestaje się kompilować tam, gdzie nie jest obsłużony** (mapowanie na HTTP, na Kafkę). Kompilator pilnuje kompletności.
+- **Przegrany wyścig o wersję strumienia** (`ConcurrentModification`) jest wartością. `JdbcEventStore` zamienia `DuplicateKeyException` w `Result.Failure`.
+- **Command handler cofa transakcję jawnie.** Metoda, która zwraca `Failure`, kończy się normalnie, więc Spring by ją zatwierdził razem z tym,
+  co zdążyło się zapisać (np. pierwszym z dwóch zdarzeń). Dlatego po nieudanym `save` handler robi `setRollbackOnly()`.
+  Test `SaveFailureIntegrationTest` pilnuje tego: bez tej linii zostaje w bazie połowa operacji.
+- **Wyjątki zostają tylko na granicy z frameworkami:**
+  - awaria infrastruktury (baza, outbox) leci jako wyjątek i cofa transakcję: zdarzenia, projekcje i outbox schodzą razem,
+  - listener Kafki musi rzucić wyjątek, żeby kontener ponowił albo odrzucił wiadomość: `RejectedMessageException` (od razu do DLT)
+    i `RetryableMessageException` (retry z back-offem, potem DLT). Rzuca je `orElseThrow` w jednym miejscu, na brzegu listenera,
+  - błędna konfiguracja (np. `app.screening.timeout`) przerywa start aplikacji.
 
 ## Gwarancje: spójność, idempotencja, kolejność
 
@@ -108,7 +133,8 @@ com.gs5.<context>
    - Partycję obsługuje jeden wątek, a commit offsetu następuje po każdym rekordzie (`ack-mode: record`).
    - Retry są **blokujące** (`DefaultErrorHandler`), po nich wiadomość trafia do DLT.
    - Non-blocking retry topics są celowo niewykorzystane, bo pozwoliłyby kolejnym zdarzeniom tego samego klienta wyprzedzić błędne.
-   - Błędy nienaprawialne (`MalformedMessageException`, `DomainException`) idą od razu do DLT.
+   - Błędy nienaprawialne (nieczytelna wiadomość, odmowa domeny: `RejectedMessageException`) idą od razu do DLT.
+     Przegrany wyścig o wersję (`RetryableMessageException`) jest ponawiany.
 6. **At-least-once + idempotencja.**
    - Każda wiadomość ma `eventId`. Inbox (`processed_message`) i efekt biznesowy commitują się atomowo.
    - Dodatkowo agregaty są idempotentne na poziomie domeny: drugi ban nic nie zmienia, drugi screening się nie otwiera.

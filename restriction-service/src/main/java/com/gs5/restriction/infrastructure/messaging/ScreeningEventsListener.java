@@ -30,14 +30,17 @@ class ScreeningEventsListener {
 
     @KafkaListener(topics = "${app.kafka.topics.screening-events}")
     void on(ConsumerRecord<String, String> record) {
-        IntegrationEvent event = codec.decode(record.value());
+        IntegrationEvent event = codec.decode(record.value()).orElseThrow(InboundFailures::unusable);
         if (!CLIENT_RESTRICTED.equals(event.eventType())) {
             log.debug("Ignoring {} - not relevant for restrictions", event.eventType());
             return;
         }
-        ClientRestrictedV1 restricted = codec.payloadOf(event, ClientRestrictedV1.class);
-        inbox.processOnce(event.eventId(), () -> commands.handle(new BanClientCommand(
-                CustomerId.of(restricted.customerId()), restricted.reason(), RestrictionSource.SANCTIONS_SCREENING)));
+        ClientRestrictedV1 restricted = codec.payloadOf(event, ClientRestrictedV1.class)
+                .orElseThrow(InboundFailures::unusable);
+        inbox.processOnce(event.eventId(), () -> CustomerId.of(restricted.customerId())
+                .flatMap(id -> commands.handle(
+                        new BanClientCommand(id, restricted.reason(), RestrictionSource.SANCTIONS_SCREENING)))
+                .orElseThrow(InboundFailures::refused));
     }
 
     /** This context's own view of the upstream contract - only the fields it needs (tolerant reader). */

@@ -2,6 +2,8 @@ package com.gs5.restriction.application;
 
 import com.gs5.restriction.domain.ClientRestrictionRepository;
 import com.gs5.restriction.domain.CustomerId;
+import com.gs5.restriction.domain.RestrictionError;
+import com.gs5.restriction.domain.shared.Result;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,7 +17,7 @@ public class RestrictionQueries {
     }
 
     @Transactional(readOnly = true)
-    public RestrictionView get(CustomerId customerId) {
-        return RestrictionView.of(restrictions.findById(customerId));
+    public Result<RestrictionView, RestrictionError> get(CustomerId customerId) {
+        return restrictions.load(customerId).map(RestrictionView::of);
     }
 }

@@ -1,9 +1,10 @@
 package com.gs5.restriction.domain;
 
+import com.gs5.restriction.domain.RestrictionError.InvalidValue;
 import com.gs5.restriction.domain.RestrictionEvent.BanRequestIgnored;
 import com.gs5.restriction.domain.RestrictionEvent.ClientBanned;
 import com.gs5.restriction.domain.shared.EventSourcedAggregate;
-import com.gs5.restriction.domain.shared.InvalidValueException;
+import com.gs5.restriction.domain.shared.Result;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -38,17 +39,20 @@ public final class ClientRestriction extends EventSourcedAggregate<RestrictionEv
         return restriction;
     }
 
-    public void ban(String reason, RestrictionSource source, Clock clock) {
+    /** A rejected ban raises no event and leaves the aggregate untouched. */
+    public Result<ClientRestriction, RestrictionError> ban(String reason, RestrictionSource source, Clock clock) {
         if (reason == null || reason.isBlank() || source == null) {
-            throw new InvalidValueException("A ban requires a reason and a source");
+            return Result.failure(new InvalidValue("A ban requires a reason and a source"));
         }
         if (banned) {
             raise(new BanRequestIgnored(customerId.value(), reason, source, clock.instant()));
-            return;
+        } else {
+            raise(new ClientBanned(customerId.value(), reason, source, clock.instant()));
         }
-        raise(new ClientBanned(customerId.value(), reason, source, clock.instant()));
+        return Result.success(this);
     }
 
+    /** Replays trusted history: events were validated when they were raised, so no validation happens here. */
     @Override
     protected void apply(RestrictionEvent event) {
         switch (event) {
@@ -58,7 +62,7 @@ public final class ClientRestriction extends EventSourcedAggregate<RestrictionEv
                 banSource = clientBanned.source();
                 bannedAt = clientBanned.occurredAt();
             }
-            case BanRequestIgnored ignored -> {
+            case BanRequestIgnored _ -> {
                 // audit only - state does not change
             }
         }

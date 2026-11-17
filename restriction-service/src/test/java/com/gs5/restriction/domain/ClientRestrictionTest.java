@@ -1,16 +1,19 @@
 package com.gs5.restriction.domain;
 
+import com.gs5.restriction.domain.RestrictionError.InvalidValue;
 import com.gs5.restriction.domain.RestrictionEvent.BanRequestIgnored;
 import com.gs5.restriction.domain.RestrictionEvent.ClientBanned;
-import com.gs5.restriction.domain.shared.InvalidValueException;
+import com.gs5.restriction.domain.shared.Result;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.fail;
 
 class ClientRestrictionTest {
 
@@ -26,8 +29,10 @@ class ClientRestrictionTest {
     void bansClient() {
         var restriction = ClientRestriction.unrestricted(CUSTOMER_ID);
 
-        restriction.ban("Surname on blacklist", RestrictionSource.SANCTIONS_SCREENING, CLOCK);
+        Result<ClientRestriction, RestrictionError> result =
+                restriction.ban("Surname on blacklist", RestrictionSource.SANCTIONS_SCREENING, CLOCK);
 
+        assertThat(valueOf(result)).isSameAs(restriction);
         assertThat(restriction.uncommittedEvents()).singleElement().isInstanceOf(ClientBanned.class);
         assertThat(restriction.isBanned()).isTrue();
         assertThat(restriction.banSource()).hasValue(RestrictionSource.SANCTIONS_SCREENING);
@@ -46,9 +51,51 @@ class ClientRestrictionTest {
     }
 
     @Test
-    void rejectsBanWithoutReason() {
-        assertThatThrownBy(() -> ClientRestriction.unrestricted(CUSTOMER_ID)
-                .ban(" ", RestrictionSource.MANUAL, CLOCK))
-                .isInstanceOf(InvalidValueException.class);
+    void rejectsBanWithoutReasonAndRaisesNothing() {
+        var restriction = ClientRestriction.unrestricted(CUSTOMER_ID);
+
+        assertThat(failureOf(restriction.ban(" ", RestrictionSource.MANUAL, CLOCK))).isInstanceOf(InvalidValue.class);
+        assertThat(failureOf(restriction.ban("Fraud", null, CLOCK))).isInstanceOf(InvalidValue.class);
+
+        assertThat(restriction.uncommittedEvents()).isEmpty();
+        assertThat(restriction.isBanned()).isFalse();
+    }
+
+    @Test
+    void rehydratesFromHistoryAndEmptyHistoryIsAnUnrestrictedClient() {
+        UUID id = CUSTOMER_ID.value();
+        var history = List.<RestrictionEvent>of(
+                new ClientBanned(id, "Fraud", RestrictionSource.MANUAL, CLOCK.instant()));
+
+        var banned = ClientRestriction.rehydrate(CUSTOMER_ID, history);
+        var unrestricted = ClientRestriction.rehydrate(CUSTOMER_ID, List.of());
+
+        assertThat(banned.isBanned()).isTrue();
+        assertThat(banned.version()).isEqualTo(1);
+        assertThat(unrestricted.isBanned()).isFalse();
+        assertThat(unrestricted.version()).isZero();
+    }
+
+    @Test
+    void parsesCustomerId() {
+        UUID id = UUID.randomUUID();
+
+        assertThat(valueOf(CustomerId.of(id.toString()))).isEqualTo(new CustomerId(id));
+        assertThat(failureOf(CustomerId.of("not-a-uuid"))).isInstanceOf(InvalidValue.class);
+        assertThat(failureOf(CustomerId.of(null))).isInstanceOf(InvalidValue.class);
+    }
+
+    private static <T> T valueOf(Result<T, RestrictionError> result) {
+        return switch (result) {
+            case Result.Success<T, RestrictionError>(var value) -> value;
+            case Result.Failure<T, RestrictionError>(var error) -> fail("expected a value but got " + error);
+        };
+    }
+
+    private static <T> RestrictionError failureOf(Result<T, RestrictionError> result) {
+        return switch (result) {
+            case Result.Failure<T, RestrictionError>(var error) -> error;
+            case Result.Success<T, RestrictionError>(var value) -> fail("expected a failure but got " + value);
+        };
     }
 }
