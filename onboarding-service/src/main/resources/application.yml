@@ -1,0 +1,57 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: onboarding-service
+  datasource:
+    url: jdbc:postgresql://localhost:5441/onboarding
+    username: onboarding
+    password: onboarding
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      acks: all
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        # idempotent producer keeps per-partition order even with retries and up to 5 in-flight requests
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+    consumer:
+      group-id: ${spring.application.name}
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    listener:
+      ack-mode: record
+      concurrency: 3
+      missing-topics-fatal: false
+  mvc:
+    problemdetails:
+      enabled: true
+
+app:
+  kafka:
+    partitions: 6
+    replication-factor: 1
+    dead-letter-suffix: .onboarding-service.dlt
+    topics:
+      onboarding-events: onboarding.customer-events.v1
+      screening-events: screening.client-events.v1
+      restriction-events: restriction.client-events.v1
+  screening:
+    timeout: 15m             # escalate to manual review if screening has not answered by then
+    check-interval-ms: 30000
+    batch-size: 100
+  outbox:
+    poll-interval-ms: 200
+    batch-size: 100
+    send-timeout: 10s
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

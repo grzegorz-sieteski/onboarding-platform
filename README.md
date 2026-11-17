@@ -1,0 +1,150 @@
+# Onboarding Platform: 3 mikroserwisy, DDD, Event Sourcing, Kafka
+
+Trzy niezależne serwisy Spring Boot (Java 21, Spring Boot 3.5) współpracują przez Kafkę w modelu **choreografii**.
+Nie ma tu centralnego orkiestratora: każdy serwis reaguje na fakty opublikowane przez inny.
+
+```
+                 ApplicantVerified                 ClientRestricted
+ ┌────────────┐ ───────────────────▶ ┌────────────┐ ─────────────────▶ ┌──────────────┐
+ │ Onboarding │  onboarding.customer │ Screening  │  screening.client  │ Restriction  │
+ │  :8081     │  -events.v1          │  :8082     │  -events.v1        │  :8083       │
+ └────────────┘ ◀─────────────────── └────────────┘                    └──────────────┘
+       ▲            ClientCleared                                              │
+       │            screening.client-events.v1                                 │
+       └──────────────────────── ClientBanned ─────────────────────────────────┘
+                                 restriction.client-events.v1
+```
+
+Cykl życia onboardingu:
+
+```
+start ─▶ PENDING_VERIFICATION ─┬─▶ REJECTED                                   (EligibilityPolicy: dane / wiek)
+                               └─▶ PENDING_SCREENING ─┬──────────────▶ ONBOARDED  (ClientCleared)
+                                                      │
+                                       (minął termin) └─▶ MANUAL_REVIEW ─┬─▶ ONBOARDED  (akceptacja oficera / spóźnione ClientCleared)
+                                                                         └─▶ REJECTED   (odrzucenie przez oficera)
+każdy status poza BANNED ──────────────────────────────────────────────▶ BANNED     (ClientBanned)
+```
+
+Klient jest aktywny (`ONBOARDED`) **dopiero po pozytywnym screeningu albo decyzji oficera compliance**.
+
+### Timeout screeningu i ręczna weryfikacja
+- **Termin wylicza domena.** `ApplicantVerified` niesie `screeningDueAt` (`ScreeningSla`, `app.screening.timeout`, domyślnie 15 min).
+- **Kto szuka przeterminowanych.** `ScreeningTimeoutJob` (co `app.screening.check-interval-ms`, ShedLock, więc działa na jednej replice) czyta projekcję `screening_deadline`.
+  Dla każdego klienta wysyła komendę `EscalateOverdueScreening`.
+- **Decyzja należy do agregatu.** Metoda `escalateIfScreeningOverdue()` eskaluje tylko klienta, który *nadal* czeka po terminie (zdarzenie `ManualReviewRequested`).
+  Jeśli w międzyczasie przyszedł werdykt, nic się nie dzieje. Wyścig z równoległym `ClientCleared` rozstrzyga optimistic locking: przegrany próbuje ponownie i dostaje już nowy stan.
+- **Kolejka compliance** to projekcja `manual_review_queue`: `GET /api/manual-reviews`.
+- **Decyzja oficera** jest audytowana:
+  - `POST .../{id}/approve` → `ManualReviewApproved` + `CustomerOnboarded`,
+  - `POST .../{id}/reject` → `ManualReviewRejected` + `OnboardingRejected`.
+- **Spóźniony werdykt** screeningu nadal obowiązuje:
+  - `ClientCleared` w `MANUAL_REVIEW` aktywuje klienta i zamyka sprawę;
+  - `ClientRestricted` → `ClientBanned` banuje klienta nawet po ręcznej akceptacji;
+  - werdykt dla sprawy już rozstrzygniętej jest ignorowany.
+- **Projekcje są inline.** Aktualizują się w tej samej transakcji co event store, więc nie rozjeżdżają się ze zdarzeniami i można je odbudować z `event_store`.
+
+## Bounded contexts
+
+| Kontekst | Serwis | Odpowiedzialność | Język (ubiquitous language) |
+|---|---|---|---|
+| **Customer Onboarding** (core) | `onboarding-service` | przyjmuje wniosek, sprawdza dane (pełnoletność), czeka na screening, aktywuje klienta po `ClientCleared`, banuje po `ClientBanned` | Applicant, Onboarding, Eligibility, Pending Screening / Onboarded / Rejected / Banned |
+| **Sanctions Screening** (supporting, compliance) | `screening-service` | sprawdza nazwisko klienta z czarną listą i wydaje werdykt | Screening Case, Blacklist, Surname match, Cleared / Restricted |
+| **Client Restrictions** (supporting) | `restriction-service` | jedno źródło prawdy o tym, czy klient jest zablokowany, niezależnie od źródła decyzji (screening albo ręcznie) | Restriction, Ban, Restriction Source |
+
+### Context map
+- **Onboarding → Screening**: Onboarding jest upstreamem i publikuje *Published Language* (`ApplicantVerified.v1`). Screening jest konsumentem z własnym modelem (`ScreenedPerson`) i czyta tylko potrzebne pola (*tolerant reader*).
+- **Screening → Onboarding**: `ClientCleared.v1` aktywuje klienta. Negatywny werdykt celowo nie idzie bezpośrednio do onboardingu: o banie decyduje kontekst Restriction.
+- **Screening → Restriction**: Screening publikuje `ClientRestricted.v1`, a Restriction tłumaczy ten fakt na własną komendę `BanClient(source = SANCTIONS_SCREENING)`.
+- **Restriction → Onboarding**: Restriction publikuje `ClientBanned.v1`, a Onboarding wykonuje `BanOnboarding`.
+- Konteksty **nie współdzielą kodu ani bazy**. Każdy ma własną kopię klas kontraktu (consumer-side), własną bazę Postgres, własny topic i własny DLT.
+
+## Agregaty (wszystkie event-sourced)
+
+| Agregat | Stream | Zdarzenia domenowe (wewnętrzne) | Inwarianty |
+|---|---|---|---|
+| `CustomerOnboarding` | `customer-onboarding-{customerId}` | `OnboardingStarted`, `ApplicantVerified`, `ManualReviewRequested`, `ManualReviewApproved`, `ManualReviewRejected`, `CustomerOnboarded`, `OnboardingRejected`, `OnboardingBanned` | weryfikacja przez `EligibilityPolicy` raz, przy starcie; `ONBOARDED` tylko po screeningu lub akceptacji oficera; eskalacja tylko po terminie i tylko raz; ban jest ostateczny, idempotentny i wygrywa z późniejszym werdyktem |
+| `ScreeningCase` | `screening-case-{customerId}` | `ScreeningRequested`, `ScreeningPassed`, `BlacklistMatchFound` | klient jest screenowany raz; strumień jest audytem decyzji compliance |
+| `ClientRestriction` | `client-restriction-{customerId}` | `ClientBanned`, `BanRequestIgnored` | klient jest banowany co najwyżej raz; kolejne żądania trafiają tylko do audytu |
+
+Value objecty: `CustomerId`, `PersonName`, `EmailAddress`, `Applicant`, `Surname` (normalizacja: wielkość liter, diakrytyki, `ł→l`), `BlacklistEntry`.
+Domain service / policy: `EligibilityPolicy`. Porty domenowe: `*Repository`, `Blacklist`.
+
+**Czarna lista celowo nie jest event-sourced.** To dane referencyjne utrzymywane przez compliance (zwykły CRUD).
+Event-sourced są *decyzje* podjęte na jej podstawie, czyli `ScreeningCase`.
+
+Zdarzenia domenowe (wewnętrzne) **≠** zdarzenia integracyjne (publiczne, wersjonowane `V1`).
+Mapowanie robią klasy `*IntegrationEvents`. Zdarzenia czysto wewnętrzne, np. `OnboardingStarted` czy `BanRequestIgnored`, nie wychodzą z serwisu.
+
+## Architektura serwisu (clean / hexagonal)
+
+```
+com.example.<context>
+├── domain/            czysta Java, zero Springa: agregaty, VO, zdarzenia (sealed), polityki, porty
+│   └── shared/        EventSourcedAggregate, DomainEvent, DomainException
+├── application/       use case'y (command handler + queries), granica transakcji
+└── infrastructure/
+    ├── eventstore/    JdbcEventStore (optimistic concurrency), EventSerializer (rejestr z sealed interface)
+    ├── persistence/   repozytorium event-sourced = event store + outbox w jednej transakcji
+    ├── outbox/        transactional outbox + OutboxRelay
+    ├── messaging/     koperta IntegrationEvent, kontrakty V1, listener, inbox, konfiguracja Kafki
+    ├── web/           REST + ProblemDetail
+    └── config/
+```
+
+## Gwarancje: spójność, idempotencja, kolejność
+
+1. **Brak dual-write.** Zapis zdarzeń do `event_store` i wiadomości do `outbox` odbywa się w jednej lokalnej transakcji.
+   Kafka dostaje wiadomość dopiero z outboxa (`OutboxRelay`).
+2. **Kolejność w obrębie agregatu (event store).** Unikalny klucz `(stream_id, stream_version)` daje optimistic locking.
+   Dwóch równoległych pisarzy nie dopisze tej samej wersji.
+3. **Kolejność publikacji.**
+   - `OutboxRelay` działa tylko na jednej replice naraz (**ShedLock**).
+   - Wysyła wiadomości po kolei i synchronicznie. Przy pierwszym błędzie przerywa batch, więc późniejsza wiadomość nigdy nie wyprzedzi wcześniejszej.
+4. **Kolejność w Kafce.**
+   - Klucz wiadomości = `customerId`, więc wszystkie zdarzenia klienta trafiają do jednej partycji.
+   - Producent ma `enable.idempotence=true` i `acks=all`. Retry nie zamienia więc kolejności, nawet przy 5 requestach in-flight.
+5. **Kolejność konsumpcji.**
+   - Partycję obsługuje jeden wątek, a commit offsetu następuje po każdym rekordzie (`ack-mode: record`).
+   - Retry są **blokujące** (`DefaultErrorHandler`), po nich wiadomość trafia do DLT.
+   - Non-blocking retry topics są celowo niewykorzystane, bo pozwoliłyby kolejnym zdarzeniom tego samego klienta wyprzedzić błędne.
+   - Błędy nienaprawialne (`MalformedMessageException`, `DomainException`) idą od razu do DLT.
+6. **At-least-once + idempotencja.**
+   - Każda wiadomość ma `eventId`. Inbox (`processed_message`) i efekt biznesowy commitują się atomowo.
+   - Dodatkowo agregaty są idempotentne na poziomie domeny: drugi ban nic nie zmienia, drugi screening się nie otwiera.
+7. **Brak kolejności między topicami.** `ClientCleared` (topic screeningu) i `ClientBanned` (topic restriction) mogą dotrzeć do onboardingu w dowolnej kolejności, np. przy ręcznym banie w trakcie screeningu.
+   Kafka tego nie uporządkuje, więc rozstrzyga to maszyna stanów agregatu: `BANNED` jest stanem końcowym, a spóźnione `ClientCleared` jest ignorowane.
+   Wynik nie zależy od kolejności dostarczenia (test `banWinsWhenClearanceArrivesAfterIt`).
+8. Koperta niesie `aggregateVersion`, więc konsument może wykrywać luki lub reordering, gdy kontrakty zaczną mieć wiele zdarzeń na klienta.
+
+## Uruchomienie
+
+```bash
+mvn -q package -DskipTests        # 3 niezależne jary (root pom to tylko agregator buildu, nie parent)
+docker compose up -d --build      # Kafka (KRaft) + 3x Postgres + 3 serwisy
+./scripts/e2e.sh                  # pełny scenariusz: blacklist -> onboarding -> BANNED / ONBOARDED
+./scripts/e2e-screening-timeout.sh # awaria screeningu -> timeout -> MANUAL_REVIEW -> akceptacja -> spóźniony werdykt ignorowany
+```
+
+Testy (bez Dockera: H2 w trybie PostgreSQL + `@EmbeddedKafka`):
+
+```bash
+mvn test
+```
+
+### API
+| Serwis | Endpoint |
+|---|---|
+| onboarding :8081 | `POST /api/onboardings` `{firstName,lastName,email,dateOfBirth}` · `GET /api/onboardings/{customerId}` |
+| onboarding :8081 | `GET /api/manual-reviews` · `POST /api/manual-reviews/{customerId}/approve` `{reviewer,comment}` · `POST /api/manual-reviews/{customerId}/reject` `{reviewer,reason}` |
+| screening :8082 | `POST /api/blacklist` `{lastName,reason}` · `GET /api/blacklist` · `DELETE /api/blacklist/{lastName}` · `GET /api/screenings/{customerId}` |
+| restriction :8083 | `GET /api/restrictions/{customerId}` · `POST /api/restrictions/{customerId}/ban` `{reason}` |
+
+## Świadome uproszczenia i dalsze kroki
+- **Reviewer to pole w żądaniu.** Produkcyjnie powinien pochodzić z uwierzytelnienia (np. JWT), a endpointy `/api/manual-reviews` powinny wymagać roli compliance.
+- **Brak powiadomień o eskalacji.** Można dodać publiczne zdarzenie `OnboardingEscalated.v1` dla serwisu powiadomień albo alertów.
+- **Dopasowanie po samym nazwisku**, zgodnie z wymaganiem. Produkcyjnie potrzebne są imię, data urodzenia i fuzzy matching.
+- **Read side** buduje się przez replay strumienia, co przy krótkich strumieniach w zupełności wystarcza.
+  Następny krok to projekcje i snapshoty.
+- **Ponowny screening** po dopisaniu nazwiska do listy (`BlacklistEntryAdded` → rescreen istniejących klientów).
+- **Contract testing** (np. Pact lub JSON Schema w registry) zamiast ręcznie zduplikowanych rekordów kontraktu.
