@@ -133,6 +133,9 @@ switch (commands.handle(command)) {
 
 - **Domena i aplikacja nie rzucają wyjątków.** Value objecty walidują w fabrykach `of(...)` (`EmailAddress.of`, `Surname.of`, `CustomerId.of`...),
   komendy agregatu zwracają `Result`, a command handler i repozytorium też. Odrzucona komenda nie tworzy zdarzenia ani nie zmienia agregatu.
+- **Silnik walidacji dla dowolnej liczby części.** Reguły ma każdy value object, a `Validation` (`domain/shared`) tylko składa wyniki:
+  `check(...)` rejestruje część i zwraca typowany uchwyt, a `build(...)` tworzy całość dopiero wtedy, gdy przeszły wszystkie części.
+  Inaczej zwraca wszystkie błędy naraz: pojedynczy bez zmian, kilka jako `InvalidInput`. HTTP odpowiada wtedy 400 z listą `problems`.
 - **Dodanie nowego błędu przestaje się kompilować tam, gdzie nie jest obsłużony** (mapowanie na HTTP, na Kafkę). Kompilator pilnuje kompletności.
 - **Przegrany wyścig o wersję strumienia** (`ConcurrentModification`) jest wartością. `JdbcEventStore` zamienia `DuplicateKeyException` w `Result.Failure`.
 - **Porażka cofa transakcję.** Use case, który zwraca `Failure`, kończy się normalnie, a transakcja zakończona normalnie zostałaby zatwierdzona
