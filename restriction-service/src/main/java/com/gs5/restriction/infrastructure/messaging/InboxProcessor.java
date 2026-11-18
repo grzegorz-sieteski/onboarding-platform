@@ -1,43 +1,52 @@
 package com.gs5.restriction.infrastructure.messaging;
 
+import com.gs5.restriction.application.UnitOfWork;
+import com.gs5.restriction.domain.shared.Result;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.simple.JdbcClient;
-import org.springframework.stereotype.Component;
-import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 /**
- * Idempotent consumer (inbox pattern). The handler and the "processed" marker are committed in one transaction,
- * so a redelivered message (producer retry, consumer rebalance, outbox re-send) is applied exactly once.
+ * Idempotent consumer (inbox pattern). The handler and the "processed" marker are committed in one unit of work,
+ * so a redelivered message (producer retry, consumer rebalance, outbox re-send) is applied exactly once. A handler
+ * that fails rolls back with it and the message is not marked, so it can be retried or dead-lettered.
  */
-@Component
 public class InboxProcessor {
+
+    /** What happened to a delivered message. */
+    public enum Delivery {
+        PROCESSED,
+        DUPLICATE_SKIPPED
+    }
 
     private static final Logger log = LoggerFactory.getLogger(InboxProcessor.class);
 
     private final JdbcClient jdbc;
-    private final TransactionTemplate transaction;
+    private final UnitOfWork unitOfWork;
     private final Clock clock;
 
-    public InboxProcessor(JdbcClient jdbc, TransactionTemplate transaction, Clock clock) {
+    public InboxProcessor(JdbcClient jdbc, UnitOfWork unitOfWork, Clock clock) {
         this.jdbc = jdbc;
-        this.transaction = transaction;
+        this.unitOfWork = unitOfWork;
         this.clock = clock;
     }
 
-    public void processOnce(UUID messageId, Runnable handler) {
-        transaction.executeWithoutResult(status -> {
+    public <T, E> Result<Delivery, E> processOnce(UUID messageId, Supplier<Result<T, E>> handler) {
+        return unitOfWork.inTransaction(() -> {
             if (alreadyProcessed(messageId)) {
                 log.info("Skipping duplicate message {}", messageId);
-                return;
+                return Result.success(Delivery.DUPLICATE_SKIPPED);
             }
-            handler.run();
-            markProcessed(messageId);
+            return handler.get().map(_ -> {
+                markProcessed(messageId);
+                return Delivery.PROCESSED;
+            });
         });
     }
 

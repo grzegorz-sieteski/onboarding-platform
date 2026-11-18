@@ -4,14 +4,10 @@ import com.gs5.restriction.application.BanClientCommand;
 import com.gs5.restriction.application.RestrictionCommandHandler;
 import com.gs5.restriction.domain.CustomerId;
 import com.gs5.restriction.domain.RestrictionSource;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.kafka.annotation.KafkaListener;
-import org.springframework.stereotype.Component;
 
 /** Inbound adapter for the Screening context: a restricted client gets banned. */
-@Component
 class ScreeningEventsListener {
 
     static final String CLIENT_RESTRICTED = "ClientRestricted";
@@ -28,9 +24,9 @@ class ScreeningEventsListener {
         this.commands = commands;
     }
 
-    @KafkaListener(topics = "${app.kafka.topics.screening-events}")
-    void on(ConsumerRecord<String, String> record) {
-        IntegrationEvent event = codec.decode(record.value()).orElseThrow(InboundFailures::unusable);
+    /** Throws only to tell the listener container what to do with the message: dead-letter it or retry it. */
+    void on(String message) {
+        IntegrationEvent event = codec.decode(message).orElseThrow(InboundFailures::unusable);
         if (!CLIENT_RESTRICTED.equals(event.eventType())) {
             log.debug("Ignoring {} - not relevant for restrictions", event.eventType());
             return;
@@ -38,9 +34,9 @@ class ScreeningEventsListener {
         ClientRestrictedV1 restricted = codec.payloadOf(event, ClientRestrictedV1.class)
                 .orElseThrow(InboundFailures::unusable);
         inbox.processOnce(event.eventId(), () -> CustomerId.of(restricted.customerId())
-                .flatMap(id -> commands.handle(
-                        new BanClientCommand(id, restricted.reason(), RestrictionSource.SANCTIONS_SCREENING)))
-                .orElseThrow(InboundFailures::refused));
+                        .flatMap(id -> commands.handle(
+                                new BanClientCommand(id, restricted.reason(), RestrictionSource.SANCTIONS_SCREENING))))
+                .orElseThrow(InboundFailures::refused);
     }
 
     /** This context's own view of the upstream contract - only the fields it needs (tolerant reader). */

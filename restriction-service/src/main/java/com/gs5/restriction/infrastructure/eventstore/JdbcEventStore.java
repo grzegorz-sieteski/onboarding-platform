@@ -3,7 +3,6 @@ package com.gs5.restriction.infrastructure.eventstore;
 import com.gs5.restriction.domain.shared.Result;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.simple.JdbcClient;
-import org.springframework.stereotype.Component;
 
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -16,7 +15,6 @@ import java.util.List;
  * that loaded the same version cannot both append - the second one gets a {@link StreamConflict}.
  * This is also what keeps events of a single aggregate totally ordered.
  */
-@Component
 public class JdbcEventStore {
 
     private final JdbcClient jdbc;

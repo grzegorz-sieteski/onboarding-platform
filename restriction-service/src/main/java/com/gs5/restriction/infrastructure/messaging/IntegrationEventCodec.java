@@ -2,14 +2,12 @@ package com.gs5.restriction.infrastructure.messaging;
 
 import com.gs5.restriction.domain.shared.Result;
 import com.gs5.restriction.infrastructure.outbox.OutboxMessage;
-import org.springframework.stereotype.Component;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
 import java.util.UUID;
 
-@Component
 public class IntegrationEventCodec {
 
     private final ObjectMapper objectMapper;

@@ -4,20 +4,18 @@ import com.gs5.restriction.domain.ClientRestrictionRepository;
 import com.gs5.restriction.domain.CustomerId;
 import com.gs5.restriction.domain.RestrictionError;
 import com.gs5.restriction.domain.shared.Result;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
-@Service
 public class RestrictionQueries {
 
     private final ClientRestrictionRepository restrictions;
+    private final UnitOfWork unitOfWork;
 
-    public RestrictionQueries(ClientRestrictionRepository restrictions) {
+    public RestrictionQueries(ClientRestrictionRepository restrictions, UnitOfWork unitOfWork) {
         this.restrictions = restrictions;
+        this.unitOfWork = unitOfWork;
     }
 
-    @Transactional(readOnly = true)
     public Result<RestrictionView, RestrictionError> get(CustomerId customerId) {
-        return restrictions.load(customerId).map(RestrictionView::of);
+        return unitOfWork.readOnly(() -> restrictions.load(customerId).map(RestrictionView::of));
     }
 }

@@ -6,13 +6,11 @@ import com.gs5.restriction.domain.RestrictionEvent.BanRequestIgnored;
 import com.gs5.restriction.domain.RestrictionEvent.ClientBanned;
 import com.gs5.restriction.infrastructure.messaging.PublishedEvents.ClientBannedV1;
 import com.gs5.restriction.infrastructure.outbox.OutboxMessage;
-import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
-@Component
 public class RestrictionIntegrationEvents {
 
     private final IntegrationEventCodec codec;

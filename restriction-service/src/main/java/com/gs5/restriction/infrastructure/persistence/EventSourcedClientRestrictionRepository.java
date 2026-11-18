@@ -14,15 +14,12 @@ import com.gs5.restriction.infrastructure.eventstore.StoredEvent;
 import com.gs5.restriction.infrastructure.eventstore.StreamConflict;
 import com.gs5.restriction.infrastructure.messaging.RestrictionIntegrationEvents;
 import com.gs5.restriction.infrastructure.outbox.OutboxRepository;
-import org.springframework.stereotype.Repository;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionOperations;
 
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
 
-@Repository
 class EventSourcedClientRestrictionRepository implements ClientRestrictionRepository {
 
     private static final String STREAM_PREFIX = "client-restriction-";
@@ -32,15 +29,21 @@ class EventSourcedClientRestrictionRepository implements ClientRestrictionReposi
     private final RestrictionIntegrationEvents integrationEvents;
     private final OutboxRepository outbox;
     private final Clock clock;
+    private final TransactionOperations insideCallersTransaction;
 
+    /**
+     * @param insideCallersTransaction joins the caller's transaction and refuses to run without one: events and
+     *                                 outbox messages are only atomic inside a single transaction
+     */
     EventSourcedClientRestrictionRepository(JdbcEventStore eventStore, EventSerializer<RestrictionEvent> serializer,
                                             RestrictionIntegrationEvents integrationEvents, OutboxRepository outbox,
-                                            Clock clock) {
+                                            Clock clock, TransactionOperations insideCallersTransaction) {
         this.eventStore = eventStore;
         this.serializer = serializer;
         this.integrationEvents = integrationEvents;
         this.outbox = outbox;
         this.clock = clock;
+        this.insideCallersTransaction = insideCallersTransaction;
     }
 
     @Override
@@ -58,13 +61,16 @@ class EventSourcedClientRestrictionRepository implements ClientRestrictionReposi
     }
 
     /**
-     * Events and outbox messages are written atomically, in one local transaction. A lost optimistic concurrency
+     * Events and outbox messages are written atomically, in the caller's transaction. A lost optimistic concurrency
      * race is reported as a {@code ConcurrentModification} value; anything else that goes wrong is an
      * infrastructure failure and surfaces as an exception, which rolls the whole transaction back.
      */
     @Override
-    @Transactional(propagation = Propagation.MANDATORY)
     public Result<ClientRestriction, RestrictionError> save(ClientRestriction restriction) {
+        return insideCallersTransaction.execute(_ -> append(restriction));
+    }
+
+    private Result<ClientRestriction, RestrictionError> append(ClientRestriction restriction) {
         List<RestrictionEvent> newEvents = restriction.uncommittedEvents();
         if (newEvents.isEmpty()) {
             return Result.success(restriction);

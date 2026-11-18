@@ -1,20 +1,18 @@
-package com.gs5.restriction.infrastructure.config;
+package com.gs5.restriction.infrastructure.scheduling;
 
+import net.javacrumbs.shedlock.core.DefaultLockingTaskExecutor;
 import net.javacrumbs.shedlock.core.LockProvider;
+import net.javacrumbs.shedlock.core.LockingTaskExecutor;
 import net.javacrumbs.shedlock.provider.jdbctemplate.JdbcTemplateLockProvider;
-import net.javacrumbs.shedlock.spring.annotation.EnableSchedulerLock;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.scheduling.annotation.EnableScheduling;
 
 import javax.sql.DataSource;
 
-/** Distributed lock so that only one replica runs the outbox relay at a time. */
-@Configuration
-@EnableScheduling
-@EnableSchedulerLock(defaultLockAtMostFor = "PT1M")
-class SchedulingConfig {
+/** The distributed lock that keeps each periodic job on one replica at a time. */
+@Configuration(proxyBeanMethods = false)
+public class SchedulingConfiguration {
 
     @Bean
     LockProvider lockProvider(DataSource dataSource) {
@@ -22,5 +20,10 @@ class SchedulingConfig {
                 .withJdbcTemplate(new JdbcTemplate(dataSource))
                 .usingDbTime()
                 .build());
+    }
+
+    @Bean
+    LockingTaskExecutor lockingTaskExecutor(LockProvider lockProvider) {
+        return new DefaultLockingTaskExecutor(lockProvider);
     }
 }
