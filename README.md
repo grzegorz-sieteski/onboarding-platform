@@ -80,17 +80,44 @@ Mapowanie robią klasy `*IntegrationEvents`. Zdarzenia czysto wewnętrzne, np. `
 
 ```
 com.gs5.<context>
-├── domain/            czysta Java, zero Springa: agregaty, VO, zdarzenia (sealed), polityki, porty
+├── *ServiceApplication   composition root: @Import jawnej listy konfiguracji, bez skanowania classpath
+├── domain/            czysta Java: agregaty, VO, zdarzenia i błędy (sealed), polityki, porty
 │   └── shared/        EventSourcedAggregate, DomainEvent, Result<T, E>
-├── application/       use case'y (command handler + queries), granica transakcji
-└── infrastructure/
+├── application/       use case'y (command handler + queries) i port UnitOfWork - zero Springa
+└── infrastructure/    adaptery to zwykłe klasy; każdy pakiet ma własną *Configuration, która je składa
     ├── eventstore/    JdbcEventStore (optimistic concurrency), EventSerializer (rejestr z sealed interface)
-    ├── persistence/   repozytorium event-sourced = event store + outbox w jednej transakcji
-    ├── outbox/        transactional outbox + OutboxRelay
-    ├── messaging/     koperta IntegrationEvent, kontrakty V1, listener, inbox, konfiguracja Kafki
-    ├── web/           REST + ProblemDetail
-    └── config/
+    ├── persistence/   repozytorium event-sourced, TransactionTemplateUnitOfWork
+    ├── projection/    (onboarding) projekcje inline: kolejka manual review, terminy screeningu
+    ├── outbox/        transactional outbox + OutboxRelay, uruchamiany jako PeriodicJob
+    ├── messaging/     koperta IntegrationEvent, kontrakty V1, listenery, inbox, konfiguracja Kafki
+    ├── scheduling/    PeriodicJob: harmonogram z JDK + ShedLock wołany z kodu
+    ├── web/           functional endpoints (RouterFunction) + ProblemDetail
+    └── config/        UseCaseConfiguration: składa use case'y z portów
 ```
+
+## Bez adnotacji w kodzie: Spring tylko w konfiguracji
+
+Domena i aplikacja to czysta Java. Adaptery to zwykłe klasy bez adnotacji. Spring „wie” o naszych klasach tylko z klas
+`*Configuration`, które budują obiekty przez `new` w metodach `@Bean`.
+
+- **Nic nie jest skanowane.** Klasa startowa ma `@SpringBootConfiguration`, `@EnableAutoConfiguration` i `@Import` z jawną listą
+  konfiguracji. Konfiguracje mają `proxyBeanMethods = false`, więc nie powstają też proxy CGLIB.
+- **Konfiguracja leży w pakiecie adaptera** (`PersistenceConfiguration`, `MessagingConfiguration`, `WebConfiguration`...),
+  więc klasy adaptera zostają package-private. Reszta kodu widzi tylko porty.
+- **Transakcje bez `@Transactional`.** Warstwa aplikacji ma port `UnitOfWork`, a infrastruktura implementuje go na `TransactionTemplate`.
+  Repozytorium działa w `TransactionTemplate` z `PROPAGATION_MANDATORY`, czyli odmawia zapisu poza transakcją wywołującego.
+- **HTTP bez kontrolerów.** Functional endpoints: wszystkie trasy są w jednym `RouterFunction` w `WebConfiguration`, a handlery
+  to zwykłe klasy. Walidacja jest tylko w domenie (fabryki `of(...)`), bez Bean Validation i bez dublowania reguł.
+- **Kafka bez `@KafkaListener`.** Kontenery listenerów buduje kod: `createContainer(topic)` na fabryce Spring Boota i `setupMessageListener(...)`.
+  Dostają ten sam error handler, ack mode i współbieżność co adnotowany listener.
+- **Harmonogram bez `@Scheduled` i `@SchedulerLock`.** `PeriodicJob` to `ScheduledExecutorService` z JDK i ShedLock wywołany z kodu
+  (`DefaultLockingTaskExecutor`), startowany i zatrzymywany jawnie.
+- **Konfiguracja bez `@ConfigurationProperties`.** Rekordy `*Properties` są zwykłymi rekordami wiązanymi przez `Binder` w konfiguracji.
+  Wszystkie wartości są w `application.yml`.
+- **Pilnuje tego test, a nie obietnica.** `ArchitectureTest` (ArchUnit) w każdym serwisie sprawdza, że domena i aplikacja nie zależą
+  od Springa ani od infrastruktury, a adnotacje Springa są tylko w klasach `*Configuration` i w klasie startowej.
+- **Use case'y da się testować bez kontenera.** `OnboardingCommandHandlerTest` używa repozytorium w pamięci i `UnitOfWork`,
+  który tylko zapisuje, czy był rollback.
 
 ## Błędy to wartości, nie wyjątki (`Result<T, E>`)
 
@@ -108,8 +135,8 @@ switch (commands.handle(command)) {
   komendy agregatu zwracają `Result`, a command handler i repozytorium też. Odrzucona komenda nie tworzy zdarzenia ani nie zmienia agregatu.
 - **Dodanie nowego błędu przestaje się kompilować tam, gdzie nie jest obsłużony** (mapowanie na HTTP, na Kafkę). Kompilator pilnuje kompletności.
 - **Przegrany wyścig o wersję strumienia** (`ConcurrentModification`) jest wartością. `JdbcEventStore` zamienia `DuplicateKeyException` w `Result.Failure`.
-- **Command handler cofa transakcję jawnie.** Metoda, która zwraca `Failure`, kończy się normalnie, więc Spring zatwierdziłby ją razem z tym,
-  co zdążyło się zapisać (np. pierwszym z dwóch zdarzeń). Dlatego po nieudanym `save` handler robi `setRollbackOnly()`.
+- **Porażka cofa transakcję.** Use case, który zwraca `Failure`, kończy się normalnie, a transakcja zakończona normalnie zostałaby zatwierdzona
+  razem z tym, co zdążyło się zapisać (np. pierwszym z dwóch zdarzeń). Dlatego `UnitOfWork` cofa każdy `Failure` (`setRollbackOnly()`).
   Na H2 pilnuje tego `SaveFailureIntegrationTest`: bez tej linii zostaje w bazie połowa operacji.
   PostgreSQL po nieudanym `INSERT` sam unieważnia całą transakcję, więc w prawdziwym wyścigu na Postgresie (30 klientów, 6 równoległych
   zatwierdzeń każdy) wynik był taki sam z tą linią i bez niej. Linia sprawia, że poprawność nie zależy od tego, jak dana baza traktuje błąd w trakcie transakcji.
