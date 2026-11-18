@@ -101,6 +101,13 @@ class ScreeningKafkaIntegrationTest {
                         .query(Long.class).single() == 2);
     }
 
+    @Test
+    void rejectsAnIncompleteBlacklistEntryListingEveryProblem() throws Exception {
+        mvc.perform(post("/api/blacklist").contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.problems.length()").value(2));
+    }
+
     private ConsumerRecord<String, String> awaitRecord(String key) {
         return await().atMost(Duration.ofSeconds(15)).until(() -> {
             KafkaTestUtils.getRecords(consumer, Duration.ofMillis(200)).forEach(received::add);

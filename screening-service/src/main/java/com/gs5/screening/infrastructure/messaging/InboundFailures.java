@@ -3,6 +3,7 @@ package com.gs5.screening.infrastructure.messaging;
 import com.gs5.screening.domain.ScreeningError;
 import com.gs5.screening.domain.ScreeningError.ConcurrentModification;
 import com.gs5.screening.domain.ScreeningError.CorruptedHistory;
+import com.gs5.screening.domain.ScreeningError.InvalidInput;
 import com.gs5.screening.domain.ScreeningError.InvalidValue;
 import com.gs5.screening.domain.ScreeningError.ScreeningNotFound;
 
@@ -21,7 +22,7 @@ final class InboundFailures {
     static RuntimeException refused(ScreeningError error) {
         return switch (error) {
             case ConcurrentModification _ -> new RetryableMessageException(error.message());
-            case InvalidValue _, ScreeningNotFound _, CorruptedHistory _ ->
+            case InvalidValue _, InvalidInput _, ScreeningNotFound _, CorruptedHistory _ ->
                     new RejectedMessageException(error.message());
         };
     }

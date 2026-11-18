@@ -1,5 +1,6 @@
 package com.gs5.restriction.domain;
 
+import com.gs5.restriction.domain.RestrictionError.InvalidInput;
 import com.gs5.restriction.domain.RestrictionError.InvalidValue;
 import com.gs5.restriction.domain.RestrictionEvent.BanRequestIgnored;
 import com.gs5.restriction.domain.RestrictionEvent.ClientBanned;
@@ -59,6 +60,16 @@ class ClientRestrictionTest {
 
         assertThat(restriction.uncommittedEvents()).isEmpty();
         assertThat(restriction.isBanned()).isFalse();
+    }
+
+    @Test
+    void reportsEveryMissingPartOfABanAtOnce() {
+        var restriction = ClientRestriction.unrestricted(CUSTOMER_ID);
+
+        assertThat(failureOf(restriction.ban(" ", null, CLOCK))).isInstanceOfSatisfying(InvalidInput.class, input ->
+                assertThat(input.problems().stream().map(RestrictionError::message).toList())
+                        .containsExactly("A ban requires a reason", "A ban requires a source"));
+        assertThat(restriction.uncommittedEvents()).isEmpty();
     }
 
     @Test

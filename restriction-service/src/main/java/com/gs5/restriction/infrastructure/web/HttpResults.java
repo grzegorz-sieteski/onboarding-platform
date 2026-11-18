@@ -3,6 +3,7 @@ package com.gs5.restriction.infrastructure.web;
 import com.gs5.restriction.domain.RestrictionError;
 import com.gs5.restriction.domain.RestrictionError.ConcurrentModification;
 import com.gs5.restriction.domain.RestrictionError.CorruptedHistory;
+import com.gs5.restriction.domain.RestrictionError.InvalidInput;
 import com.gs5.restriction.domain.RestrictionError.InvalidValue;
 import com.gs5.restriction.domain.shared.Result;
 import org.springframework.http.HttpStatus;
@@ -46,11 +47,15 @@ final class HttpResults {
 
     static ProblemDetail problemFor(RestrictionError error) {
         HttpStatus status = switch (error) {
-            case InvalidValue _ -> HttpStatus.BAD_REQUEST;
+            case InvalidValue _, InvalidInput _ -> HttpStatus.BAD_REQUEST;
             case ConcurrentModification _ -> HttpStatus.CONFLICT;
             case CorruptedHistory _ -> HttpStatus.INTERNAL_SERVER_ERROR;
         };
-        return ProblemDetail.forStatusAndDetail(status, error.message());
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(status, error.message());
+        if (error instanceof InvalidInput(var problems)) {
+            problem.setProperty("problems", problems.stream().map(RestrictionError::message).toList());
+        }
+        return problem;
     }
 
     private static <T> Result<T, RestrictionError> unreadable(Class<T> type) {

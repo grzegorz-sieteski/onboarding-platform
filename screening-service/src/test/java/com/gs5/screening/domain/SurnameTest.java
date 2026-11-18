@@ -1,5 +1,6 @@
 package com.gs5.screening.domain;
 
+import com.gs5.screening.domain.ScreeningError.InvalidInput;
 import com.gs5.screening.domain.ScreeningError.InvalidValue;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -49,6 +50,20 @@ class SurnameTest {
     void screenedPersonNeedsFirstNameAndSurname() {
         assertThat(failureOf(ScreenedPerson.of(" ", "Nowak"))).isInstanceOf(InvalidValue.class);
         assertThat(failureOf(ScreenedPerson.of("Jan", null))).isInstanceOf(InvalidValue.class);
+    }
+
+    @Test
+    void blacklistEntryReportsEveryMissingPartAtOnce() {
+        assertThat(failureOf(BlacklistEntry.of(" ", null))).isInstanceOfSatisfying(InvalidInput.class, input ->
+                assertThat(input.problems().stream().map(ScreeningError::message).toList())
+                        .containsExactly("Surname must not be blank", "Blacklist entry requires a reason"));
+    }
+
+    @Test
+    void screenedPersonReportsEveryMissingPartAtOnce() {
+        assertThat(failureOf(ScreenedPerson.of(null, ""))).isInstanceOfSatisfying(InvalidInput.class, input ->
+                assertThat(input.problems().stream().map(ScreeningError::message).toList())
+                        .containsExactly("Screened person requires a first name", "Surname must not be blank"));
     }
 
     @Test

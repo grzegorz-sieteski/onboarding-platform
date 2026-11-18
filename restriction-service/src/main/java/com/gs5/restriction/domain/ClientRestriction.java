@@ -1,10 +1,12 @@
 package com.gs5.restriction.domain;
 
+import com.gs5.restriction.domain.RestrictionError.InvalidInput;
 import com.gs5.restriction.domain.RestrictionError.InvalidValue;
 import com.gs5.restriction.domain.RestrictionEvent.BanRequestIgnored;
 import com.gs5.restriction.domain.RestrictionEvent.ClientBanned;
 import com.gs5.restriction.domain.shared.EventSourcedAggregate;
 import com.gs5.restriction.domain.shared.Result;
+import com.gs5.restriction.domain.shared.Validation;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -41,15 +43,33 @@ public final class ClientRestriction extends EventSourcedAggregate<RestrictionEv
 
     /** A rejected ban raises no event and leaves the aggregate untouched. */
     public Result<ClientRestriction, RestrictionError> ban(String reason, RestrictionSource source, Clock clock) {
-        if (reason == null || reason.isBlank() || source == null) {
-            return Result.failure(new InvalidValue("A ban requires a reason and a source"));
-        }
+        var validation = Validation.of(InvalidInput::new);
+        var validReason = validation.check(validReason(reason));
+        var validSource = validation.check(validSource(source));
+        return validation.build(() -> recordBan(validReason.value(), validSource.value(), clock.instant()));
+    }
+
+    private ClientRestriction recordBan(String reason, RestrictionSource source, Instant at) {
         if (banned) {
-            raise(new BanRequestIgnored(customerId.value(), reason, source, clock.instant()));
+            raise(new BanRequestIgnored(customerId.value(), reason, source, at));
         } else {
-            raise(new ClientBanned(customerId.value(), reason, source, clock.instant()));
+            raise(new ClientBanned(customerId.value(), reason, source, at));
         }
-        return Result.success(this);
+        return this;
+    }
+
+    private static Result<String, RestrictionError> validReason(String reason) {
+        if (reason == null || reason.isBlank()) {
+            return Result.failure(new InvalidValue("A ban requires a reason"));
+        }
+        return Result.success(reason);
+    }
+
+    private static Result<RestrictionSource, RestrictionError> validSource(RestrictionSource source) {
+        if (source == null) {
+            return Result.failure(new InvalidValue("A ban requires a source"));
+        }
+        return Result.success(source);
     }
 
     /** Replays trusted history: events were validated when they were raised, so no validation happens here. */

@@ -3,6 +3,7 @@ package com.gs5.screening.infrastructure.web;
 import com.gs5.screening.domain.ScreeningError;
 import com.gs5.screening.domain.ScreeningError.ConcurrentModification;
 import com.gs5.screening.domain.ScreeningError.CorruptedHistory;
+import com.gs5.screening.domain.ScreeningError.InvalidInput;
 import com.gs5.screening.domain.ScreeningError.InvalidValue;
 import com.gs5.screening.domain.ScreeningError.ScreeningNotFound;
 import com.gs5.screening.domain.shared.Result;
@@ -47,12 +48,16 @@ final class HttpResults {
 
     static ProblemDetail problemFor(ScreeningError error) {
         HttpStatus status = switch (error) {
-            case InvalidValue _ -> HttpStatus.BAD_REQUEST;
+            case InvalidValue _, InvalidInput _ -> HttpStatus.BAD_REQUEST;
             case ScreeningNotFound _ -> HttpStatus.NOT_FOUND;
             case ConcurrentModification _ -> HttpStatus.CONFLICT;
             case CorruptedHistory _ -> HttpStatus.INTERNAL_SERVER_ERROR;
         };
-        return ProblemDetail.forStatusAndDetail(status, error.message());
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(status, error.message());
+        if (error instanceof InvalidInput(var problems)) {
+            problem.setProperty("problems", problems.stream().map(ScreeningError::message).toList());
+        }
+        return problem;
     }
 
     private static <T> Result<T, ScreeningError> unreadable(Class<T> type) {
