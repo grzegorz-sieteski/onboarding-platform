@@ -5,38 +5,35 @@ import com.gs5.screening.domain.BlacklistEntry;
 import com.gs5.screening.domain.ScreeningError;
 import com.gs5.screening.domain.Surname;
 import com.gs5.screening.domain.shared.Result;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
-@Service
+/** Use cases of the compliance officers who maintain the blacklist (reference data, deliberately not event sourced). */
 public class BlacklistManagement {
 
     private final Blacklist blacklist;
+    private final UnitOfWork unitOfWork;
 
-    public BlacklistManagement(Blacklist blacklist) {
+    public BlacklistManagement(Blacklist blacklist, UnitOfWork unitOfWork) {
         this.blacklist = blacklist;
+        this.unitOfWork = unitOfWork;
     }
 
-    @Transactional
     public Result<BlacklistEntry, ScreeningError> add(String surname, String reason) {
-        return BlacklistEntry.of(surname, reason).map(entry -> {
+        return unitOfWork.inTransaction(() -> BlacklistEntry.of(surname, reason).map(entry -> {
             blacklist.add(entry);
             return entry;
-        });
+        }));
     }
 
-    @Transactional
     public Result<Surname, ScreeningError> remove(String surname) {
-        return Surname.of(surname).map(parsed -> {
+        return unitOfWork.inTransaction(() -> Surname.of(surname).map(parsed -> {
             blacklist.remove(parsed);
             return parsed;
-        });
+        }));
     }
 
-    @Transactional(readOnly = true)
     public List<BlacklistEntry> entries() {
-        return blacklist.entries();
+        return unitOfWork.readOnly(blacklist::entries);
     }
 }

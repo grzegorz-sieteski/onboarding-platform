@@ -8,13 +8,11 @@ import com.gs5.screening.domain.ScreeningEvent.ScreeningRequested;
 import com.gs5.screening.infrastructure.messaging.PublishedEvents.ClientClearedV1;
 import com.gs5.screening.infrastructure.messaging.PublishedEvents.ClientRestrictedV1;
 import com.gs5.screening.infrastructure.outbox.OutboxMessage;
-import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
-@Component
 public class ScreeningIntegrationEvents {
 
     private final IntegrationEventCodec codec;

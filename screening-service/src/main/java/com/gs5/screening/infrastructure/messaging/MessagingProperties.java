@@ -1,16 +1,15 @@
 package com.gs5.screening.infrastructure.messaging;
 
-import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.boot.context.properties.bind.DefaultValue;
-
 import java.time.Duration;
 
-@ConfigurationProperties(prefix = "app.kafka")
-public record MessagingProperties(Topics topics,
-                                  @DefaultValue("6") int partitions,
-                                  @DefaultValue("1") short replicationFactor,
-                                  @DefaultValue("1s") Duration retryInterval,
-                                  @DefaultValue("3") long maxRetries) {
+/**
+ * Configuration of the Kafka adapter, bound from {@code app.kafka}.
+ *
+ * @param retryInterval pause between blocking retries of a failed message
+ * @param maxRetries    retries before a message goes to the dead letter topic
+ */
+public record MessagingProperties(Topics topics, int partitions, short replicationFactor, Duration retryInterval,
+                                  long maxRetries) {
 
     /**
      * @param screeningEvents     topic owned and written by this service

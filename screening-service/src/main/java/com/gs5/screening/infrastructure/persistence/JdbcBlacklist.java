@@ -4,7 +4,6 @@ import com.gs5.screening.domain.Blacklist;
 import com.gs5.screening.domain.BlacklistEntry;
 import com.gs5.screening.domain.Surname;
 import org.springframework.jdbc.core.simple.JdbcClient;
-import org.springframework.stereotype.Repository;
 
 import java.time.Clock;
 import java.time.OffsetDateTime;
@@ -13,7 +12,6 @@ import java.util.List;
 import java.util.Optional;
 
 /** Lookup is done by the normalized surname computed in the domain, so the matching rule lives in one place. */
-@Repository
 class JdbcBlacklist implements Blacklist {
 
     private final JdbcClient jdbc;

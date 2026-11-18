@@ -36,6 +36,8 @@ app:
   kafka:
     partitions: 6
     replication-factor: 1
+    retry-interval: 1s       # pause between blocking retries of a failed message
+    max-retries: 3           # then the message goes to the dead letter topic
     topics:
       screening-events: screening.client-events.v1
       onboarding-events: onboarding.customer-events.v1

@@ -15,15 +15,12 @@ import com.gs5.screening.infrastructure.eventstore.StoredEvent;
 import com.gs5.screening.infrastructure.eventstore.StreamConflict;
 import com.gs5.screening.infrastructure.messaging.ScreeningIntegrationEvents;
 import com.gs5.screening.infrastructure.outbox.OutboxRepository;
-import org.springframework.stereotype.Repository;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionOperations;
 
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
 
-@Repository
 class EventSourcedScreeningCaseRepository implements ScreeningCaseRepository {
 
     private static final String STREAM_PREFIX = "screening-case-";
@@ -33,15 +30,21 @@ class EventSourcedScreeningCaseRepository implements ScreeningCaseRepository {
     private final ScreeningIntegrationEvents integrationEvents;
     private final OutboxRepository outbox;
     private final Clock clock;
+    private final TransactionOperations insideCallersTransaction;
 
+    /**
+     * @param insideCallersTransaction joins the caller's transaction and refuses to run without one: events and
+     *                                 outbox messages are only atomic inside a single transaction
+     */
     EventSourcedScreeningCaseRepository(JdbcEventStore eventStore, EventSerializer<ScreeningEvent> serializer,
                                         ScreeningIntegrationEvents integrationEvents, OutboxRepository outbox,
-                                        Clock clock) {
+                                        Clock clock, TransactionOperations insideCallersTransaction) {
         this.eventStore = eventStore;
         this.serializer = serializer;
         this.integrationEvents = integrationEvents;
         this.outbox = outbox;
         this.clock = clock;
+        this.insideCallersTransaction = insideCallersTransaction;
     }
 
     @Override
@@ -64,13 +67,16 @@ class EventSourcedScreeningCaseRepository implements ScreeningCaseRepository {
     }
 
     /**
-     * Events and outbox messages are written atomically, in one local transaction. A lost optimistic concurrency
+     * Events and outbox messages are written atomically, in the caller's transaction. A lost optimistic concurrency
      * race is reported as a {@code ConcurrentModification} value; anything else that goes wrong is an
      * infrastructure failure and surfaces as an exception, which rolls the whole transaction back.
      */
     @Override
-    @Transactional(propagation = Propagation.MANDATORY)
     public Result<ScreeningCase, ScreeningError> save(ScreeningCase screeningCase) {
+        return insideCallersTransaction.execute(_ -> append(screeningCase));
+    }
+
+    private Result<ScreeningCase, ScreeningError> append(ScreeningCase screeningCase) {
         List<ScreeningEvent> newEvents = screeningCase.uncommittedEvents();
         if (newEvents.isEmpty()) {
             return Result.success(screeningCase);
