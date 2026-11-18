@@ -157,6 +157,15 @@ class OnboardingKafkaIntegrationTest {
                 .andExpect(jsonPath("$.problems[3]").value("Date of birth must not be null"));
     }
 
+    @Test
+    void rejectsAnApprovalWithABadPathAndABadBodyListingBoth() throws Exception {
+        mvc.perform(post("/api/manual-reviews/{id}/approve", "not-a-uuid")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("not json"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.problems.length()").value(2));
+    }
+
     private String startOnboarding(String firstName, String lastName) throws Exception {
         String response = mvc.perform(post("/api/onboardings")
                         .contentType(MediaType.APPLICATION_JSON)

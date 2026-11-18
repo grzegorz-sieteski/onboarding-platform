@@ -2,16 +2,16 @@ package com.gs5.onboarding.infrastructure.web;
 
 import com.gs5.onboarding.application.OnboardingCommandHandler;
 import com.gs5.onboarding.application.OnboardingQueries;
-import com.gs5.onboarding.domain.CustomerId;
+import com.gs5.onboarding.application.OnboardingView;
 import org.springframework.web.servlet.function.ServerRequest;
 import org.springframework.web.servlet.function.ServerResponse;
 
 import java.net.URI;
 
+import static com.gs5.onboarding.infrastructure.web.HttpResults.customerId;
 import static com.gs5.onboarding.infrastructure.web.HttpResults.read;
-import static com.gs5.onboarding.infrastructure.web.HttpResults.respond;
 
-/** HTTP adapter of the onboarding use cases: a request becomes a command, a result becomes a response. */
+/** HTTP adapter of the onboarding use cases. Every endpoint reads top-down: request, command, result, response. */
 final class OnboardingHandlers {
 
     private final OnboardingCommandHandler commands;
@@ -23,14 +23,20 @@ final class OnboardingHandlers {
     }
 
     ServerResponse start(ServerRequest request) {
-        return respond(read(request, StartOnboardingRequest.class)
-                        .flatMap(body -> commands.handle(body.toCommand()))
-                        .flatMap(queries::get),
-                view -> ServerResponse.created(URI.create("/api/onboardings/" + view.customerId())).body(view));
+        return read(request, StartOnboardingRequest.class)
+                .map(StartOnboardingRequest::toCommand)
+                .flatMap(commands::handle)
+                .flatMap(queries::get)
+                .fold(OnboardingHandlers::created, HttpResults::problem);
     }
 
     ServerResponse get(ServerRequest request) {
-        return respond(CustomerId.of(request.pathVariable("customerId")).flatMap(queries::get),
-                view -> ServerResponse.ok().body(view));
+        return customerId(request)
+                .flatMap(queries::get)
+                .fold(HttpResults::ok, HttpResults::problem);
+    }
+
+    private static ServerResponse created(OnboardingView view) {
+        return ServerResponse.created(URI.create("/api/onboardings/" + view.customerId())).body(view);
     }
 }

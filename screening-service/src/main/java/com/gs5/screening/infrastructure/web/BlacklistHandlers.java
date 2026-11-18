@@ -7,9 +7,8 @@ import org.springframework.web.servlet.function.ServerRequest;
 import org.springframework.web.servlet.function.ServerResponse;
 
 import static com.gs5.screening.infrastructure.web.HttpResults.read;
-import static com.gs5.screening.infrastructure.web.HttpResults.respond;
 
-/** HTTP adapter of blacklist maintenance. */
+/** HTTP adapter of blacklist maintenance. Every endpoint reads top-down: request, use case, response. */
 final class BlacklistHandlers {
 
     private final BlacklistManagement blacklist;
@@ -19,17 +18,23 @@ final class BlacklistHandlers {
     }
 
     ServerResponse add(ServerRequest request) {
-        return respond(read(request, AddBlacklistEntryRequest.class)
-                        .flatMap(body -> blacklist.add(body.lastName(), body.reason())),
-                entry -> ServerResponse.status(HttpStatus.CREATED).body(BlacklistEntryResponse.of(entry)));
+        return read(request, AddBlacklistEntryRequest.class)
+                .flatMap(body -> blacklist.add(body.lastName(), body.reason()))
+                .map(BlacklistEntryResponse::of)
+                .fold(BlacklistHandlers::created, HttpResults::problem);
     }
 
     ServerResponse entries(ServerRequest request) {
-        return ServerResponse.ok().body(blacklist.entries().stream().map(BlacklistEntryResponse::of).toList());
+        return HttpResults.ok(blacklist.entries().stream().map(BlacklistEntryResponse::of).toList());
     }
 
     ServerResponse remove(ServerRequest request) {
-        return respond(blacklist.remove(request.pathVariable("lastName")), _ -> ServerResponse.noContent().build());
+        return blacklist.remove(request.pathVariable("lastName"))
+                .fold(_ -> ServerResponse.noContent().build(), HttpResults::problem);
+    }
+
+    private static ServerResponse created(BlacklistEntryResponse entry) {
+        return ServerResponse.status(HttpStatus.CREATED).body(entry);
     }
 
     /** Request body; deliberately not validated here - the domain validates it. */
