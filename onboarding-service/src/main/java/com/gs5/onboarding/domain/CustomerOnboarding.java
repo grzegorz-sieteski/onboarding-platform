@@ -80,14 +80,14 @@ public final class CustomerOnboarding extends EventSourcedAggregate<OnboardingEv
         return Optional.of(onboarding);
     }
 
-    /** Late or duplicate verdicts for an already decided onboarding are ignored. */
+    /** A late or repeated verdict for an onboarding that is already decided changes nothing. */
     public Result<CustomerOnboarding, OnboardingError> confirmScreeningCleared(Clock clock) {
         return switch (status) {
             case PENDING_SCREENING, MANUAL_REVIEW -> {
                 raise(new CustomerOnboarded(customerId.value(), clock.instant()));
-                yield accepted();
+                yield changed();
             }
-            case ONBOARDED, REJECTED, BANNED -> accepted();
+            case ONBOARDED, REJECTED, BANNED -> unchanged();
             case PENDING_VERIFICATION -> illegalTransition("activate");
         };
     }
@@ -95,10 +95,11 @@ public final class CustomerOnboarding extends EventSourcedAggregate<OnboardingEv
     /** Safe to call at any time - only an onboarding that is still waiting past its deadline gets escalated. */
     public Result<CustomerOnboarding, OnboardingError> escalateIfScreeningOverdue(Clock clock) {
         Instant now = clock.instant();
-        if (status == PENDING_SCREENING && !now.isBefore(screeningDueAt)) {
-            raise(new ManualReviewRequested(customerId.value(), "Screening not completed by " + screeningDueAt, now));
+        if (status != PENDING_SCREENING || now.isBefore(screeningDueAt)) {
+            return unchanged();
         }
-        return accepted();
+        raise(new ManualReviewRequested(customerId.value(), "Screening not completed by " + screeningDueAt, now));
+        return changed();
     }
 
     public Result<CustomerOnboarding, OnboardingError> approveManualReview(String reviewer, String comment,
@@ -128,7 +129,7 @@ public final class CustomerOnboarding extends EventSourcedAggregate<OnboardingEv
 
     public Result<CustomerOnboarding, OnboardingError> ban(String reason, Clock clock) {
         if (status == BANNED) {
-            return accepted();
+            return unchanged();
         }
         return requireText(reason, "Ban reason").map(validReason -> {
             raise(new OnboardingBanned(customerId.value(), validReason, clock.instant()));
@@ -143,7 +144,17 @@ public final class CustomerOnboarding extends EventSourcedAggregate<OnboardingEv
         }
     }
 
-    private Result<CustomerOnboarding, OnboardingError> accepted() {
+    /** The command took effect: the events it raised are waiting to be saved. */
+    private Result<CustomerOnboarding, OnboardingError> changed() {
+        return Result.success(this);
+    }
+
+    /**
+     * The command is legitimate but has nothing left to do: a late, repeated or overruled request (Kafka delivers at
+     * least once and gives no order between topics). Not an error - a failure would send a perfectly normal message
+     * to the dead letter topic.
+     */
+    private Result<CustomerOnboarding, OnboardingError> unchanged() {
         return Result.success(this);
     }
 
@@ -152,7 +163,7 @@ public final class CustomerOnboarding extends EventSourcedAggregate<OnboardingEv
     }
 
     private Result<CustomerOnboarding, OnboardingError> requireStatus(OnboardingStatus required, String action) {
-        return status == required ? accepted() : illegalTransition(action);
+        return status == required ? Result.success(this) : illegalTransition(action);
     }
 
     private static Result<String, OnboardingError> requireText(String text, String label) {
