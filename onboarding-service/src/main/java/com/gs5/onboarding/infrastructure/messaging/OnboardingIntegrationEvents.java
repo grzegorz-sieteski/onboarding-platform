@@ -14,14 +14,12 @@ import com.gs5.onboarding.infrastructure.messaging.PublishedEvents.ApplicantVeri
 import com.gs5.onboarding.infrastructure.messaging.PublishedEvents.CustomerOnboardedV1;
 import com.gs5.onboarding.infrastructure.messaging.PublishedEvents.OnboardingBannedV1;
 import com.gs5.onboarding.infrastructure.outbox.OutboxMessage;
-import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
 /** Translates internal domain events into the published language. Only facts other contexts care about leave. */
-@Component
 public class OnboardingIntegrationEvents {
 
     private final IntegrationEventCodec codec;

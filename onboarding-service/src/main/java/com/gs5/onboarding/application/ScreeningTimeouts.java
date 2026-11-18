@@ -5,7 +5,6 @@ import com.gs5.onboarding.domain.OnboardingError;
 import com.gs5.onboarding.domain.shared.Result;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Service;
 
 import java.time.Clock;
 
@@ -14,7 +13,6 @@ import java.time.Clock;
  * transaction, so one failure (e.g. a concurrent "cleared" verdict) does not block the others; it is simply
  * picked up again on the next run - and the aggregate decides again whether escalation is still needed.
  */
-@Service
 public class ScreeningTimeouts {
 
     private static final Logger log = LoggerFactory.getLogger(ScreeningTimeouts.class);

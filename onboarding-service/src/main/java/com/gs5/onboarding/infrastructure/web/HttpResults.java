@@ -8,27 +8,40 @@ import com.gs5.onboarding.domain.OnboardingError.InvalidValue;
 import com.gs5.onboarding.domain.OnboardingError.OnboardingNotFound;
 import com.gs5.onboarding.domain.shared.Result;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
-import org.springframework.http.ResponseEntity;
+import org.springframework.web.servlet.function.ServerRequest;
+import org.springframework.web.servlet.function.ServerResponse;
 
 import java.util.function.Function;
 
 /**
- * Turns the outcome of a use case into an HTTP response. Both switches are exhaustive over sealed types: a new
- * error that is not mapped here does not compile.
+ * Translation between HTTP and the {@code Result} of a use case. Both switches are exhaustive over sealed types:
+ * an error that is not mapped here does not compile.
  */
-final class OnboardingProblems {
+final class HttpResults {
 
-    private OnboardingProblems() {
+    private HttpResults() {
     }
 
-    static <T> ResponseEntity<?> respond(Result<T, OnboardingError> result,
-                                         Function<T, ResponseEntity<?>> onSuccess) {
+    /** A body that cannot be read is invalid input like any other; validation itself belongs to the domain. */
+    static <T> Result<T, OnboardingError> read(ServerRequest request, Class<T> type) {
+        try {
+            T body = request.body(type);
+            return body == null ? unreadable(type) : Result.success(body);
+        } catch (Exception _) {
+            return unreadable(type);
+        }
+    }
+
+    static <T> ServerResponse respond(Result<T, OnboardingError> result, Function<T, ServerResponse> onSuccess) {
         return switch (result) {
             case Result.Success<T, OnboardingError>(var value) -> onSuccess.apply(value);
             case Result.Failure<T, OnboardingError>(var error) -> {
                 ProblemDetail problem = problemFor(error);
-                yield ResponseEntity.status(problem.getStatus()).body(problem);
+                yield ServerResponse.status(problem.getStatus())
+                        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                        .body(problem);
             }
         };
     }
@@ -41,5 +54,9 @@ final class OnboardingProblems {
             case CorruptedHistory _ -> HttpStatus.INTERNAL_SERVER_ERROR;
         };
         return ProblemDetail.forStatusAndDetail(status, error.message());
+    }
+
+    private static <T> Result<T, OnboardingError> unreadable(Class<T> type) {
+        return Result.failure(new InvalidValue("Request body is not a valid " + type.getSimpleName()));
     }
 }

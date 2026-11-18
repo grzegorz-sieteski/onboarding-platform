@@ -10,7 +10,6 @@ import com.gs5.onboarding.domain.OnboardingEvent.ManualReviewRequested;
 import com.gs5.onboarding.domain.OnboardingEvent.OnboardingBanned;
 import com.gs5.onboarding.domain.OnboardingEvent.OnboardingRejected;
 import org.springframework.jdbc.core.simple.JdbcClient;
-import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -19,7 +18,6 @@ import java.util.List;
 import java.util.UUID;
 
 /** Open screening windows: a row lives from {@code ApplicantVerified} until the screening is decided or escalated. */
-@Component
 class ScreeningDeadlineProjection implements OnboardingProjection, OverdueScreenings {
 
     private final JdbcClient jdbc;

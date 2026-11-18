@@ -9,7 +9,6 @@ import com.gs5.onboarding.domain.OnboardingEvent.ManualReviewRequested;
 import com.gs5.onboarding.domain.OnboardingEvent.OnboardingBanned;
 import com.gs5.onboarding.domain.OnboardingEvent.OnboardingRejected;
 import org.springframework.jdbc.core.simple.JdbcClient;
-import org.springframework.stereotype.Component;
 
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -17,7 +16,6 @@ import java.util.List;
 import java.util.UUID;
 
 /** Work queue of compliance officers: onboardings escalated to manual review and not yet decided. */
-@Component
 class ManualReviewQueueProjection implements OnboardingProjection, ManualReviewQueue {
 
     private final JdbcClient jdbc;

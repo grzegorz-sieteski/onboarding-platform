@@ -3,17 +3,13 @@ package com.gs5.onboarding.infrastructure.messaging;
 import com.gs5.onboarding.application.ConfirmScreeningClearedCommand;
 import com.gs5.onboarding.application.OnboardingCommandHandler;
 import com.gs5.onboarding.domain.CustomerId;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.kafka.annotation.KafkaListener;
-import org.springframework.stereotype.Component;
 
 /**
  * Inbound adapter for the Screening context: a cleared customer gets activated.
  * A negative verdict is deliberately NOT handled here - banning is the Restriction context's decision.
  */
-@Component
 class ScreeningEventsListener {
 
     static final String CLIENT_CLEARED = "ClientCleared";
@@ -30,17 +26,17 @@ class ScreeningEventsListener {
         this.commands = commands;
     }
 
-    @KafkaListener(topics = "${app.kafka.topics.screening-events}")
-    void on(ConsumerRecord<String, String> record) {
-        IntegrationEvent event = codec.decode(record.value()).orElseThrow(InboundFailures::unusable);
+    /** Throws only to tell the listener container what to do with the message: dead-letter it or retry it. */
+    void on(String message) {
+        IntegrationEvent event = codec.decode(message).orElseThrow(InboundFailures::unusable);
         if (!CLIENT_CLEARED.equals(event.eventType())) {
             log.debug("Ignoring {} - not relevant for onboarding", event.eventType());
             return;
         }
         ClientClearedV1 cleared = codec.payloadOf(event, ClientClearedV1.class).orElseThrow(InboundFailures::unusable);
         inbox.processOnce(event.eventId(), () -> CustomerId.of(cleared.customerId())
-                .flatMap(id -> commands.handle(new ConfirmScreeningClearedCommand(id)))
-                .orElseThrow(InboundFailures::refused));
+                        .flatMap(id -> commands.handle(new ConfirmScreeningClearedCommand(id))))
+                .orElseThrow(InboundFailures::refused);
     }
 
     /** This context's own view of the upstream contract - only the fields it needs (tolerant reader). */

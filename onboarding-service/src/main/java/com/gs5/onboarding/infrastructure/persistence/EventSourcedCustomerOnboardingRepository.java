@@ -16,15 +16,12 @@ import com.gs5.onboarding.infrastructure.eventstore.StreamConflict;
 import com.gs5.onboarding.infrastructure.messaging.OnboardingIntegrationEvents;
 import com.gs5.onboarding.infrastructure.outbox.OutboxRepository;
 import com.gs5.onboarding.infrastructure.projection.OnboardingProjection;
-import org.springframework.stereotype.Repository;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionOperations;
 
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
 
-@Repository
 class EventSourcedCustomerOnboardingRepository implements CustomerOnboardingRepository {
 
     private static final String STREAM_PREFIX = "customer-onboarding-";
@@ -35,16 +32,23 @@ class EventSourcedCustomerOnboardingRepository implements CustomerOnboardingRepo
     private final OutboxRepository outbox;
     private final List<OnboardingProjection> projections;
     private final Clock clock;
+    private final TransactionOperations insideCallersTransaction;
 
+    /**
+     * @param insideCallersTransaction joins the caller's transaction and refuses to run without one: events,
+     *                                 projections and outbox messages are only atomic inside a single transaction
+     */
     EventSourcedCustomerOnboardingRepository(JdbcEventStore eventStore, EventSerializer<OnboardingEvent> serializer,
                                              OnboardingIntegrationEvents integrationEvents, OutboxRepository outbox,
-                                             List<OnboardingProjection> projections, Clock clock) {
+                                             List<OnboardingProjection> projections, Clock clock,
+                                             TransactionOperations insideCallersTransaction) {
         this.eventStore = eventStore;
         this.serializer = serializer;
         this.integrationEvents = integrationEvents;
         this.outbox = outbox;
         this.projections = projections;
         this.clock = clock;
+        this.insideCallersTransaction = insideCallersTransaction;
     }
 
     @Override
@@ -62,15 +66,18 @@ class EventSourcedCustomerOnboardingRepository implements CustomerOnboardingRepo
     }
 
     /**
-     * Events, inline projections and outbox messages are written atomically, in one local transaction.
+     * Events, inline projections and outbox messages are written atomically, in the caller's transaction.
      * <p>
-     * Optimistic concurrency conflict is reported as a {@code ConcurrentModification} value. Anything else that goes
+     * A lost optimistic concurrency race is reported as a {@code ConcurrentModification} value. Anything else that goes
      * wrong - the projection or the outbox insert, a lost connection - is an infrastructure failure and surfaces as
      * an exception, which rolls the whole transaction back: events, projections and outbox messages go together.
      */
     @Override
-    @Transactional(propagation = Propagation.MANDATORY)
     public Result<CustomerOnboarding, OnboardingError> save(CustomerOnboarding onboarding) {
+        return insideCallersTransaction.execute(_ -> append(onboarding));
+    }
+
+    private Result<CustomerOnboarding, OnboardingError> append(CustomerOnboarding onboarding) {
         List<OnboardingEvent> newEvents = onboarding.uncommittedEvents();
         if (newEvents.isEmpty()) {
             return Result.success(onboarding);

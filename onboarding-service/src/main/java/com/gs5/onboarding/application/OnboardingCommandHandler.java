@@ -8,85 +8,69 @@ import com.gs5.onboarding.domain.EligibilityPolicy;
 import com.gs5.onboarding.domain.OnboardingError;
 import com.gs5.onboarding.domain.ScreeningSla;
 import com.gs5.onboarding.domain.shared.Result;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.interceptor.TransactionAspectSupport;
 
 import java.time.Clock;
 import java.util.function.Function;
 
 /**
- * Application service: orchestrates use cases, owns the transaction boundary, holds no business rules.
+ * Application service: orchestrates use cases, holds no business rules and knows no framework.
  * <p>
- * Every command answers with a {@link Result}. A command rejected by the domain writes nothing. A failed
- * {@code save} may have written part of its work, and a transaction only rolls back on its own for an exception,
- * so a failure is rolled back explicitly in {@link #persist(CustomerOnboarding)}.
+ * Every command runs in one {@link UnitOfWork}. A command that fails - refused by the domain, or a lost concurrency
+ * race while saving - writes nothing.
  */
-@Service
 public class OnboardingCommandHandler {
 
     private final CustomerOnboardingRepository onboardings;
+    private final UnitOfWork unitOfWork;
     private final EligibilityPolicy eligibilityPolicy;
     private final ScreeningSla screeningSla;
     private final Clock clock;
 
-    public OnboardingCommandHandler(CustomerOnboardingRepository onboardings, EligibilityPolicy eligibilityPolicy,
-                                    ScreeningSla screeningSla, Clock clock) {
+    public OnboardingCommandHandler(CustomerOnboardingRepository onboardings, UnitOfWork unitOfWork,
+                                    EligibilityPolicy eligibilityPolicy, ScreeningSla screeningSla, Clock clock) {
         this.onboardings = onboardings;
+        this.unitOfWork = unitOfWork;
         this.eligibilityPolicy = eligibilityPolicy;
         this.screeningSla = screeningSla;
         this.clock = clock;
     }
 
-    @Transactional
     public Result<CustomerId, OnboardingError> handle(StartOnboardingCommand command) {
-        return Applicant.of(command.firstName(), command.lastName(), command.email(), command.dateOfBirth())
-                .map(applicant -> CustomerOnboarding.start(CustomerId.newId(), applicant, eligibilityPolicy,
-                        screeningSla, clock))
-                .flatMap(this::persist);
+        return unitOfWork.inTransaction(() ->
+                Applicant.of(command.firstName(), command.lastName(), command.email(), command.dateOfBirth())
+                        .map(applicant -> CustomerOnboarding.start(CustomerId.newId(), applicant, eligibilityPolicy,
+                                screeningSla, clock))
+                        .flatMap(onboardings::save)
+                        .map(CustomerOnboarding::customerId));
     }
 
-    @Transactional
     public Result<CustomerId, OnboardingError> handle(ConfirmScreeningClearedCommand command) {
         return update(command.customerId(), onboarding -> onboarding.confirmScreeningCleared(clock));
     }
 
-    @Transactional
     public Result<CustomerId, OnboardingError> handle(EscalateOverdueScreeningCommand command) {
         return update(command.customerId(), onboarding -> onboarding.escalateIfScreeningOverdue(clock));
     }
 
-    @Transactional
     public Result<CustomerId, OnboardingError> handle(ApproveManualReviewCommand command) {
         return update(command.customerId(),
                 onboarding -> onboarding.approveManualReview(command.reviewer(), command.comment(), clock));
     }
 
-    @Transactional
     public Result<CustomerId, OnboardingError> handle(RejectManualReviewCommand command) {
         return update(command.customerId(),
                 onboarding -> onboarding.rejectManualReview(command.reviewer(), command.reason(), clock));
     }
 
-    @Transactional
     public Result<CustomerId, OnboardingError> handle(BanOnboardingCommand command) {
         return update(command.customerId(), onboarding -> onboarding.ban(command.reason(), clock));
     }
 
     private Result<CustomerId, OnboardingError> update(
             CustomerId customerId, Function<CustomerOnboarding, Result<CustomerOnboarding, OnboardingError>> change) {
-        return onboardings.load(customerId)
+        return unitOfWork.inTransaction(() -> onboardings.load(customerId)
                 .flatMap(change)
-                .flatMap(this::persist);
-    }
-
-    private Result<CustomerId, OnboardingError> persist(CustomerOnboarding onboarding) {
-        return switch (onboardings.save(onboarding)) {
-            case Result.Success(var saved) -> Result.success(saved.customerId());
-            case Result.Failure(var error) -> {
-                TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
-                yield Result.failure(error);
-            }
-        };
+                .flatMap(onboardings::save)
+                .map(CustomerOnboarding::customerId));
     }
 }

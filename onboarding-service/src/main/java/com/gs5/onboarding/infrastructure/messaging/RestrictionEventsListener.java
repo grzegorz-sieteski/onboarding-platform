@@ -3,17 +3,13 @@ package com.gs5.onboarding.infrastructure.messaging;
 import com.gs5.onboarding.application.BanOnboardingCommand;
 import com.gs5.onboarding.application.OnboardingCommandHandler;
 import com.gs5.onboarding.domain.CustomerId;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.kafka.annotation.KafkaListener;
-import org.springframework.stereotype.Component;
 
 /**
  * Inbound adapter for the Restriction context. Messages of one customer share a partition and a partition is
  * consumed by exactly one thread, so they are handled strictly in the order they were published.
  */
-@Component
 class RestrictionEventsListener {
 
     static final String CLIENT_BANNED = "ClientBanned";
@@ -30,9 +26,9 @@ class RestrictionEventsListener {
         this.commands = commands;
     }
 
-    @KafkaListener(topics = "${app.kafka.topics.restriction-events}")
-    void on(ConsumerRecord<String, String> record) {
-        IntegrationEvent event = codec.decode(record.value()).orElseThrow(InboundFailures::unusable);
+    /** Throws only to tell the listener container what to do with the message: dead-letter it or retry it. */
+    void on(String message) {
+        IntegrationEvent event = codec.decode(message).orElseThrow(InboundFailures::unusable);
         if (!CLIENT_BANNED.equals(event.eventType())) {
             log.debug("Ignoring {} - not relevant for onboarding", event.eventType());
             return;
@@ -40,8 +36,8 @@ class RestrictionEventsListener {
         ClientBannedV1 clientBanned = codec.payloadOf(event, ClientBannedV1.class)
                 .orElseThrow(InboundFailures::unusable);
         inbox.processOnce(event.eventId(), () -> CustomerId.of(clientBanned.customerId())
-                .flatMap(id -> commands.handle(new BanOnboardingCommand(id, clientBanned.reason())))
-                .orElseThrow(InboundFailures::refused));
+                        .flatMap(id -> commands.handle(new BanOnboardingCommand(id, clientBanned.reason()))))
+                .orElseThrow(InboundFailures::refused);
     }
 
     /** This context's own view of the upstream contract - only the fields it needs (tolerant reader). */

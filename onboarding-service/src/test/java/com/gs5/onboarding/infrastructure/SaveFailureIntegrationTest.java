@@ -62,8 +62,8 @@ class SaveFailureIntegrationTest {
 
     /**
      * Approving a manual review appends two events (v4 and v5). Another writer commits v5 first, so our v4 goes in
-     * and our v5 collides. The handler answers with a value, not an exception - and Spring would happily COMMIT a
-     * method that returns normally, leaving v4 behind. The handler therefore marks the transaction rollback-only.
+     * and our v5 collides. The handler answers with a value, not an exception - and a transaction that ends normally
+     * would be COMMITTED, leaving v4 behind. The unit of work therefore rolls back every Failure.
      */
     @Test
     void lostRaceIsReportedAsAFailureAndTheEventWrittenBeforeTheCollisionIsRolledBack() {

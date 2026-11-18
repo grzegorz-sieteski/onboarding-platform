@@ -1,12 +1,9 @@
 package com.gs5.onboarding.infrastructure.outbox;
 
-import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
@@ -17,14 +14,14 @@ import java.util.concurrent.TimeoutException;
 /**
  * Relays outbox messages to Kafka, preserving their order.
  * <ul>
- *     <li>Only one instance of the service relays at a time (ShedLock) - running replicas cannot reorder messages.</li>
+ *     <li>Only one instance of the service relays at a time (it runs as a locked {@code PeriodicJob}) - running
+ *     replicas cannot reorder messages.</li>
  *     <li>Messages are sent one by one, synchronously, in outbox order. On the first failure the batch stops, so a
  *     later message can never overtake an earlier one; the next run resumes from the failed message.</li>
  *     <li>Key = aggregate id, so all events of one customer land in one partition, in order.</li>
  *     <li>Delivery is at-least-once (crash between send and mark) - consumers deduplicate by message id.</li>
  * </ul>
  */
-@Component
 class OutboxRelay {
 
     static final String EVENT_TYPE_HEADER = "event-type";
@@ -45,8 +42,6 @@ class OutboxRelay {
         this.clock = clock;
     }
 
-    @Scheduled(fixedDelayString = "${app.outbox.poll-interval-ms:200}")
-    @SchedulerLock(name = "outbox-relay", lockAtMostFor = "PT1M")
     void relayPendingMessages() {
         for (OutboxEntry entry : outbox.findUnpublished(properties.batchSize())) {
             if (!publish(entry.message())) {

@@ -1,9 +1,6 @@
 package com.gs5.onboarding.infrastructure.outbox;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
-import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -15,7 +12,6 @@ import java.util.UUID;
  * Transactional outbox. Messages are written in the same local transaction as the events in the event store,
  * so "state changed" and "message will be published" are atomic - no dual-write problem.
  */
-@Component
 public class OutboxRepository {
 
     private final JdbcClient jdbc;
@@ -24,7 +20,6 @@ public class OutboxRepository {
         this.jdbc = jdbc;
     }
 
-    @Transactional(propagation = Propagation.MANDATORY)
     public void enqueue(OutboxMessage message, Instant createdAt) {
         jdbc.sql("""
                         INSERT INTO outbox (message_id, topic, message_key, event_type, payload, created_at)

@@ -1,18 +1,17 @@
 package com.gs5.onboarding.infrastructure.messaging;
 
-import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.boot.context.properties.bind.DefaultValue;
-
 import java.time.Duration;
 import java.util.List;
 
-@ConfigurationProperties(prefix = "app.kafka")
-public record MessagingProperties(Topics topics,
-                                  @DefaultValue(".onboarding-service.dlt") String deadLetterSuffix,
-                                  @DefaultValue("6") int partitions,
-                                  @DefaultValue("1") short replicationFactor,
-                                  @DefaultValue("1s") Duration retryInterval,
-                                  @DefaultValue("3") long maxRetries) {
+/**
+ * Configuration of the Kafka adapter, bound from {@code app.kafka}.
+ *
+ * @param deadLetterSuffix  appended to a consumed topic to name its dead letter topic
+ * @param retryInterval     pause between blocking retries of a failed message
+ * @param maxRetries        retries before a message goes to the dead letter topic
+ */
+public record MessagingProperties(Topics topics, String deadLetterSuffix, int partitions, short replicationFactor,
+                                  Duration retryInterval, long maxRetries) {
 
     /** Every consumed topic gets its own dead letter topic, owned by this service. */
     public String deadLetterTopicOf(String consumedTopic) {
