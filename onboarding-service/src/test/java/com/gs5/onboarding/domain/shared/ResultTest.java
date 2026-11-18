@@ -53,7 +53,6 @@ class ResultTest {
         assertThat(Result.<String, String>of(Optional.of("v"), () -> "missing")).isEqualTo(Result.success("v"));
         assertThat(Result.<String, String>of(Optional.empty(), () -> "missing")).isEqualTo(Result.failure("missing"));
     }
-
     @Test
     void peekFailureRunsOnlyForAFailure() {
         List<String> seen = new ArrayList<>();

@@ -4,6 +4,7 @@ import com.gs5.onboarding.domain.OnboardingError;
 import com.gs5.onboarding.domain.OnboardingError.ConcurrentModification;
 import com.gs5.onboarding.domain.OnboardingError.CorruptedHistory;
 import com.gs5.onboarding.domain.OnboardingError.IllegalTransition;
+import com.gs5.onboarding.domain.OnboardingError.InvalidInput;
 import com.gs5.onboarding.domain.OnboardingError.InvalidValue;
 import com.gs5.onboarding.domain.OnboardingError.OnboardingNotFound;
 import com.gs5.onboarding.domain.shared.Result;
@@ -48,12 +49,16 @@ final class HttpResults {
 
     static ProblemDetail problemFor(OnboardingError error) {
         HttpStatus status = switch (error) {
-            case InvalidValue _ -> HttpStatus.BAD_REQUEST;
+            case InvalidValue _, InvalidInput _ -> HttpStatus.BAD_REQUEST;
             case OnboardingNotFound _ -> HttpStatus.NOT_FOUND;
             case IllegalTransition _, ConcurrentModification _ -> HttpStatus.CONFLICT;
             case CorruptedHistory _ -> HttpStatus.INTERNAL_SERVER_ERROR;
         };
-        return ProblemDetail.forStatusAndDetail(status, error.message());
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(status, error.message());
+        if (error instanceof InvalidInput(var problems)) {
+            problem.setProperty("problems", problems.stream().map(OnboardingError::message).toList());
+        }
+        return problem;
     }
 
     private static <T> Result<T, OnboardingError> unreadable(Class<T> type) {

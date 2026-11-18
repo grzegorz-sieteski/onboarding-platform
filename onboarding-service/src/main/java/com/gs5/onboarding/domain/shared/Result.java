@@ -39,12 +39,8 @@ public sealed interface Result<T, E> permits Result.Success, Result.Failure {
 
     /** Lifts an {@link Optional}: an empty one becomes the supplied error. */
     static <T, E> Result<T, E> of(Optional<T> optional, Supplier<? extends E> errorIfEmpty) {
-        if (optional.isPresent()) {
-            return success(optional.get());
-        }
-        return failure(errorIfEmpty.get());
+        return optional.<Result<T, E>>map(Result::success).orElseGet(() -> failure(errorIfEmpty.get()));
     }
-
     default <R> Result<R, E> map(Function<? super T, ? extends R> mapper) {
         return switch (this) {
             case Success<T, E>(var value) -> success(mapper.apply(value));

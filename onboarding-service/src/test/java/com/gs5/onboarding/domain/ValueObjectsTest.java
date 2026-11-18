@@ -1,5 +1,6 @@
 package com.gs5.onboarding.domain;
 
+import com.gs5.onboarding.domain.OnboardingError.InvalidInput;
 import com.gs5.onboarding.domain.OnboardingError.InvalidValue;
 import org.junit.jupiter.api.Test;
 
@@ -66,5 +67,17 @@ class ValueObjectsTest {
                 .isInstanceOf(InvalidValue.class);
         assertThat(failureOf(Applicant.of("Jan", "Nowak", "nope", LocalDate.parse("1990-01-01"))))
                 .isInstanceOf(InvalidValue.class);
+    }
+
+    @Test
+    void applicantReportsEveryInvalidPartAtOnce() {
+        OnboardingError error = failureOf(Applicant.of(" ", "N0wak", "nope", null));
+
+        assertThat(error).isInstanceOfSatisfying(InvalidInput.class, input ->
+                assertThat(input.problems().stream().map(OnboardingError::message).toList()).containsExactly(
+                        "First name must not be blank",
+                        "Last name contains illegal characters: N0wak",
+                        "Invalid e-mail address: nope",
+                        "Date of birth must not be null"));
     }
 }

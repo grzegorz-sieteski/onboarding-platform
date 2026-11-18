@@ -4,6 +4,7 @@ import com.gs5.onboarding.domain.OnboardingError;
 import com.gs5.onboarding.domain.OnboardingError.ConcurrentModification;
 import com.gs5.onboarding.domain.OnboardingError.CorruptedHistory;
 import com.gs5.onboarding.domain.OnboardingError.IllegalTransition;
+import com.gs5.onboarding.domain.OnboardingError.InvalidInput;
 import com.gs5.onboarding.domain.OnboardingError.InvalidValue;
 import com.gs5.onboarding.domain.OnboardingError.OnboardingNotFound;
 
@@ -22,7 +23,7 @@ final class InboundFailures {
     static RuntimeException refused(OnboardingError error) {
         return switch (error) {
             case ConcurrentModification _ -> new RetryableMessageException(error.message());
-            case InvalidValue _, OnboardingNotFound _, IllegalTransition _, CorruptedHistory _ ->
+            case InvalidValue _, InvalidInput _, OnboardingNotFound _, IllegalTransition _, CorruptedHistory _ ->
                     new RejectedMessageException(error.message());
         };
     }

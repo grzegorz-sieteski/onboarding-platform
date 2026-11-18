@@ -145,6 +145,18 @@ class OnboardingKafkaIntegrationTest {
         assertThat(awaitRecord(DEAD_LETTER_TOPIC, key).value()).isEqualTo("definitely-not-json");
     }
 
+    @Test
+    void rejectsAnInvalidApplicationListingEveryProblem() throws Exception {
+        mvc.perform(post("/api/onboardings")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"firstName":" ","lastName":"N0wak","email":"nope"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.problems.length()").value(4))
+                .andExpect(jsonPath("$.problems[3]").value("Date of birth must not be null"));
+    }
+
     private String startOnboarding(String firstName, String lastName) throws Exception {
         String response = mvc.perform(post("/api/onboardings")
                         .contentType(MediaType.APPLICATION_JSON)
